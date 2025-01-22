@@ -519,6 +519,7 @@ module internal TypeInfo =
              ty = typeof<single>
              || ty = typeof<double>
              || ty = typeof<float>
+             || ty = typeof<float32>
              || ty = typeof<decimal>
              ->
              PrimitiveFloat
@@ -620,6 +621,7 @@ module internal TypeInfo =
         | PrimitiveFloat when ty = typeof<single> -> JsonValue.Float(float (obj :?> single))
         | PrimitiveFloat when ty = typeof<double> -> JsonValue.Float(float (obj :?> double))
         | PrimitiveFloat when ty = typeof<float> -> JsonValue.Float(float (obj :?> float))
+        | PrimitiveFloat when ty = typeof<float32> -> JsonValue.Float(float (obj :?> float32))
         | PrimitiveInt
         | PrimitiveFloat -> raise (new Exception "not supposed to happen")
 
@@ -727,10 +729,12 @@ module internal TypeInfo =
             | (PrimitiveInt, JsonValue.Number x) when ty = typeof<byte> -> Ok(byte x)
             | (PrimitiveInt, JsonValue.Number x) when ty = typeof<sbyte> -> Ok(sbyte x)
             | (PrimitiveInt, JsonValue.Number x) when ty = typeof<float> -> Ok(float x)
+            | (PrimitiveInt, JsonValue.Number x) when ty = typeof<float32> -> Ok(float32 x)
             | (PrimitiveInt, JsonValue.Number x) when ty = typeof<single> -> Ok(single x)
             | (PrimitiveInt, JsonValue.Number x) when ty = typeof<double> -> Ok(double x)
             | (PrimitiveInt, JsonValue.Number x) when ty = typeof<decimal> -> Ok(decimal x)
             | (PrimitiveFloat, JsonValue.Float x) when ty = typeof<float> -> Ok(float x)
+            | (PrimitiveFloat, JsonValue.Float x) when ty = typeof<float32> -> Ok(float32 x)
             | (PrimitiveFloat, JsonValue.Float x) when ty = typeof<single> -> Ok(single x)
             | (PrimitiveFloat, JsonValue.Float x) when ty = typeof<double> -> Ok(double x)
             | (PrimitiveFloat, JsonValue.Float x) when ty = typeof<decimal> -> Ok(decimal x)

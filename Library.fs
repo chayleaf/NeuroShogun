@@ -1,6 +1,7 @@
 ﻿namespace NeuroShogun
 
 open System.Reflection
+open System.Text.RegularExpressions
 open BepInEx
 open BepInEx.Logging
 open HarmonyLib
@@ -47,7 +48,37 @@ type Observatory<'T when 'T: equality>(func: unit -> 'T) =
         value <- cur
         old <> cur
 
+[<RequireQualifiedAccess>]
+type Cheat =
+    | Quick
+    | SkipTitle
+    | ShortLocations
+    | Invulnerable
+    | TimeScale of value: float32
+    | Location of value: ProgressionEnums.LocationEnum option
+    | InitialRoomIndex of value: int
+    | CustomDay of value: int option
+    | CustomHero of value: AgentEnums.HeroEnum option
+    | Loadout of
+        n_rewards: int option *
+        tiles: TileEnums.AttackEnum array option *
+        attack_effects: TileEnums.AttackEffectEnum array option *
+        skills: SkillEnums.SkillEnum array option *
+        consumables: PotionsManager.PotionEnum array option
+    | Playground of
+        grid: DeveloperUtilities.PlaygroundConfig.GridSize option *
+        style: DeveloperUtilities.PlaygroundConfig.Style option *
+        wave: AgentEnums.EnemyEnum array option *
+        pool: AgentEnums.EnemyEnum array option
+    | Next
+    | Reset
+    | Money
+    | Skulls
+    | Kill
+    | Heal
+
 type Actions =
+    | Cheat of Cheat
     // available in combat when you can move
     // conditions
     // - AllowHeroAction
@@ -96,19 +127,20 @@ type Actions =
     | [<Action("consume", "Consume an item (does not end your turn)")>] Consume of itemName: string
     // available: when ShopRoom.Shop contains SkillShopItemData
     // mutability: list all that CanBeSold
-    | [<Action("buy_skill", "Purchase a skill")>] BuySkill of skillName: string
+    | [<Action("buy_skill", "Purchase a skill for coins")>] BuySkill of skillName: string
     // available: when ShopRoom.Shop contains ConsumableShopItem
     // mutability: list all that CanBeSold
-    | [<Action("buy_consumable", "Purchase a consumable")>] BuyConsumable of consumableName: string
+    | [<Action("buy_consumable", "Purchase a consumable for coins")>] BuyConsumable of consumableName: string
     // available: when Potion.CanBeSold
     // mutability: list all that CanBeSold
-    | [<Action("sell_consumable", "Sell a consumable")>] SellConsumable of consumableName: string
+    | [<Action("sell_consumable", "Sell a consumable for coins")>] SellConsumable of consumableName: string
     // available: when ShopRoom.Shop contains ShopUpgradeShopItem
     // mutability: list all that CanBeSold
-    | [<Action("buy_shop_upgrade", "Purchase a shop upgrade")>] BuyShopUpgrade of upgradeName: string
+    | [<Action("unlock_shop_upgrade", "Unlock a shop upgrade for skulls")>] UnlockShopUpgrade of upgradeName: string
     // available: when ShopRoom.Shop contains UnlockShopItemData, or maybe campRoom.UnlocksShop
     // mutability: list all that CanBeSold
-    | [<Action("buy_unlock", "Purchase an unlock")>] BuyUnlock of unlockName: string
+    | [<Action("unlock_consumable", "Unlock a consumable for skulls")>] UnlockConsumable of consumableName: string
+    | [<Action("unlock_skill", "Unlock a skill for skulls")>] UnlockSkill of skillName: string
     // available: when RewardRoom.Reward.TileUpgrade is WarriorGambleUpgrade
     // note: _CanUpgradeTileAndWhy, CannotUpgradeText
     | [<Action("warriors_gamble", "Reroll a tile, changing its attack and randomizing its upgrades")>] RerollTile of
@@ -125,7 +157,8 @@ type Actions =
     // available: when RewardRoom.Reward.TileUpgrade is SacrificeTileUpgrade
     | [<Action("sacrifice_tile", "Sacrifice a tile for %d coins")>] SacrificeTile of tileName: string
     // available: when RewardRoom.Reward is NewTileReward
-    | [<Action("take_tile", "Accept a tile reward")>] TakeTile of tileName: string
+    | [<Action("pick_tile_reward", "Pick a tile reward out of the options available")>] PickTileReward of
+        tileName: string
     // available: when ShopServiceEnum.get5Coins or get10Coins
     | [<Action("get_coins", "Buy coins from the shop")>] GetCoins
     // available: when ShopServiceEnum.heal
@@ -146,8 +179,124 @@ type Actions =
     // and Navigate(dir), which does horizontal/vertical nav
     | [<Action("choose_path", "Proceed to the next location")>] ChoosePath of pathIndex: int
 
+type ConsumableContext =
+    { name: string
+      description: string
+      buyPriceCoins: int option
+      unlockPriceSkulls: int option
+      sellPriceCoins: int option }
+
+type ShopUpgradeContext =
+    { name: string
+      description: string
+      unlockPriceSkulls: int option }
+
+type SkillContext =
+    { name: string
+      description: string
+      buyPriceCoins: int option
+      unlockPriceSkulls: int option }
+
+type TileContext =
+    { name: string
+      // desc
+      attack: string
+      attackEffect: string option
+      tileEffect: string option
+      buyPriceCoins: int option
+      unlockPriceSkulls: int option }
+
+type TileUpgradeContext =
+    { upgradeCost: int option
+      addedCooldown: int option
+      removedCooldown: int option
+      addedDamage: int option
+      removedDamage: int option
+      addedUpgradeSlots: int option
+      removedUpgradeSlots: int option
+      attackEffect: string option
+      tileEffect: string option
+      rerollPrice: int option }
+
+type ShopContext =
+    { consumables: ConsumableContext list option
+      upgrades: ShopUpgradeContext list option
+      skills: SkillContext list option
+      tiles: TileContext list option
+      healPrice: int option
+      rerollPrice: int option }
+
+// "{current}/{max}"
+type HpContext = string
+
+type PlayerContext =
+    { coins: int option
+      skullCurrency: int option
+      consumables: ConsumableContext list
+      tiles: TileContext list
+      skills: SkillContext list
+      hp: HpContext }
+
+type LocationContext =
+    { island: string
+      name: string
+      shop1: string
+      shop2: string }
+
+type PathsContext =
+    { up: LocationContext
+      down: LocationContext
+      left: LocationContext
+      right: LocationContext }
+
+[<RequireQualifiedAccess>]
+type Intention =
+    | MoveRight
+    | MoveLeft
+    | TurnRight
+    | TurnLeft
+    | PlayTile
+    | Attack
+
+type EnemyContext =
+    { name: string
+      description: string
+      traits: string list option
+      elite: string
+      attack_queue: Tile list
+      intention: string option
+      hp: HpContext
+      boss: bool option
+      bossPhase: int option
+      onlyVulnerableInSpotlightCells: bool option
+      flyingAndImmune: bool
+      iceResistance: bool option }
+
+type CellContext =
+    { xPos: int
+      // corrupted soul
+      yPos: int option
+      // nobunaga
+      spotlight: bool option
+      enemy: EnemyContext option
+      youAreHere: bool option }
+
+type MapContext =
+    { currentLocation: LocationContext
+      paths: PathsContext }
+
+type Context =
+    { player: PlayerContext
+      shop: ShopContext option
+      pickTileOptions: TileContext list option
+      tileUpgrade: TileUpgradeContext option
+      tileSacrificeRewardCoins: int option
+      gridCells: CellContext list option }
+
 type Game(plugin: MainClass) =
     inherit Game<Actions>()
+
+    let stripTags s = Regex(@"\[[^\]]*\]").Replace(s, "")
 
     let chk (cond: bool) (error: string) res : Result<'T, string option> =
         res |> Result.bind (fun x -> if cond then Ok x else Error(Some error))
@@ -189,6 +338,56 @@ type Game(plugin: MainClass) =
         not (chkMove dir)
         && Globals.Hero.SpecialMove.Cooldown.IsCharged
         && Globals.Hero.SpecialMove.Allowed(Globals.Hero, Dir.toGame dir)
+
+    let mutable initDone = false
+
+    member this.Update() =
+        if not initDone && EventsManager.Instance <> null then
+            initDone <- true
+            let man = EventsManager.Instance
+            man.BeginRun.AddListener(fun () -> ())
+            man.CoinsUpdate.AddListener(fun _coins -> ())
+            man.MetaCurrencyUpdate.AddListener(fun _meta -> ())
+            man.MetaCurrencyReceived.AddListener(fun _meta -> ())
+            man.EndOfCombatTurn.AddListener(fun () -> ())
+            man.BeginningOfCombatTurn.AddListener(fun () -> ())
+            man.EnterRoom.AddListener(fun _room -> ())
+            man.ExitRoom.AddListener(fun _room -> ())
+            man.BeginningOfCombat.AddListener(fun _ -> ())
+            man.EndOfCombat.AddListener(fun _ -> ())
+            man.NewWaveSpawns.AddListener(fun _wave -> ())
+            man.BeginBossFight.AddListener(fun () -> ())
+            man.EndBossFight.AddListener(fun () -> ())
+            man.IslandCleared.AddListener(fun struct (_island, _) -> ())
+            man.HeroStampObtained.AddListener(fun _stamp -> ())
+            man.GameOver.AddListener(fun _win -> ())
+            man.ShogunDefeated.AddListener(fun () -> ())
+            man.EnemyDied.AddListener(fun _enemy -> ())
+            man.BossDied.AddListener(fun _boss -> ())
+            man.EnemyFriendlyKill.AddListener(fun () -> ())
+            man.ComboKill.AddListener(fun _enemy -> ())
+            man.PreciseKill.AddListener(fun _enemy -> ())
+            man.PickupCreated.AddListener(fun _pickup -> ())
+            man.PickupPickedUp.AddListener(fun _pickup -> ())
+            man.TileUpgraded.AddListener(fun _tile -> ())
+            man.NewTilePicked.AddListener(fun _tile -> ())
+            man.ShopBegin.AddListener(fun () -> ())
+            man.UnlocksShopBegin.AddListener(fun () -> ())
+            man.ShopEnd.AddListener(fun () -> ())
+            man.Attack.AddListener(fun _attacker _attacked _hit -> ())
+            man.SkillTriggered.AddListener(fun _skill -> ())
+            man.SpecialMoveEffectOnTarget.AddListener(fun _hero _target -> ())
+            man.PotionUsed.AddListener(fun _potion -> ())
+            man.HeroIsHit.AddListener(fun struct (_hit, _attacker) -> ())
+            man.HeroHPUpdate.AddListener(fun _hp -> ())
+            man.HeroMaxHPUpdate.AddListener(fun _hp -> ())
+            man.HeroRevived.AddListener(fun () -> ())
+            man.RoomBegin.AddListener(fun _room -> ())
+            man.RoomEnd.AddListener(fun _room -> ())
+            man.MapOpened.AddListener(fun () -> ())
+            man.MapCurrentLocationCleared.AddListener(fun () -> ())
+
+        this.ReregisterActions()
 
     override this.ReregisterActions() =
         if
@@ -282,6 +481,107 @@ type Game(plugin: MainClass) =
 
     override _.HandleAction(action: Actions) =
         match action with
+        | Cheat cheat ->
+            match cheat with
+            | Cheat.Quick ->
+                Globals.DeveloperUtils.Quick <- not Globals.DeveloperUtils.Quick
+                Ok(Some $"{Globals.DeveloperUtils.Quick}")
+            | Cheat.CustomDay None ->
+                Globals.DeveloperUtils._customDay <- false
+                Ok(None)
+            | Cheat.CustomDay(Some n) ->
+                Globals.DeveloperUtils._customDay <- true
+                Globals.DeveloperUtils.day <- System.Math.Clamp(n, 1, Globals.CurrentlyImplementedMaxDay)
+                Ok(Some($"{Globals.DeveloperUtils.day}"))
+            | Cheat.CustomHero None ->
+                Globals.DeveloperUtils._customHero <- false
+                Ok(None)
+            | Cheat.CustomHero(Some n) ->
+                Globals.DeveloperUtils._customHero <- true
+                Globals.DeveloperUtils.hero <- n
+                Ok(Some $"{Globals.DeveloperUtils.CustomHero} {Globals.DeveloperUtils.hero}")
+            | Cheat.InitialRoomIndex n ->
+                Globals.DeveloperUtils.initialRoomIndex <- n
+                Ok(Some $"{Globals.DeveloperUtils.initialRoomIndex}")
+            | Cheat.Invulnerable ->
+                Globals.DeveloperUtils._invulnerable <- not Globals.DeveloperUtils._invulnerable
+                Ok(Some $"{Globals.DeveloperUtils.Invulnerable}")
+            | Cheat.SkipTitle ->
+                Globals.DeveloperUtils._skipTitleScreen <- not Globals.DeveloperUtils._skipTitleScreen
+                Ok(Some $"{Globals.DeveloperUtils.SkipTitleScreen}")
+            | Cheat.TimeScale x ->
+                UnityEngine.Time.timeScale <- x
+                Ok(Some $"{UnityEngine.Time.timeScale}")
+            | Cheat.ShortLocations ->
+                Globals.DeveloperUtils._shortLocations <- not Globals.DeveloperUtils._shortLocations
+                Ok(Some $"{Globals.DeveloperUtils.ShortLocations}")
+            | Cheat.Loadout(None, None, None, None, None) ->
+                Globals.DeveloperUtils._customLoadout <- false
+                Ok(Some "disabled")
+            | Cheat.Loadout(n_rewards, tiles, attack_effects, skills, consumables) ->
+                let l = Globals.DeveloperUtils.loadout
+                let n_rewards = Option.defaultValue l.nRewards n_rewards
+                let tiles = Option.defaultValue l.tiles tiles
+                let effects = Option.defaultValue l.attackEffects attack_effects
+                let skills = Option.defaultValue l.skills skills
+                let consumables = Option.defaultValue l.consumables consumables
+                l.nRewards <- n_rewards
+                l.tiles <- tiles
+                l.attackEffects <- effects
+                l.skills <- skills
+                l.consumables <- consumables
+                Globals.DeveloperUtils._customLoadout <- true
+
+                Ok(
+                    Some
+                        $"loadout {Globals.DeveloperUtils.CustomLoadout} {n_rewards}/{List.ofArray tiles}/{List.ofArray effects}/{List.ofArray skills}/{List.ofArray consumables}"
+                )
+            | Cheat.Location None ->
+                Globals.DeveloperUtils._customLocation <- false
+                Ok(None)
+            | Cheat.Location(Some x) ->
+                Globals.DeveloperUtils._customLocation <- true
+                Globals.DeveloperUtils.location <- x
+                Ok(Some $"{Globals.DeveloperUtils.CustomLocation} {Globals.DeveloperUtils.location}")
+            | Cheat.Playground(grid, style, wave, pool) ->
+                let c = Globals.DeveloperUtils.playgroundConfig
+                let grid = Option.defaultValue c.gridSize grid
+                let style = Option.defaultValue c.style style
+                let wave = Option.defaultValue c.wave wave
+                let pool = Option.defaultValue c.pool pool
+                c.gridSize <- grid
+                c.style <- style
+                c.wave <- wave
+                c.pool <- pool
+
+                Ok(Some $"pg {grid}/{style}/{List.ofArray wave}/{List.ofArray pool}")
+            | Cheat.Next ->
+                if CombatManager.Instance.CombatInProgress then
+                    CombatManager.Instance.KillEnemies()
+                    EventsManager.Instance.EndOfCombat.Invoke()
+                    Ok(Some "killed")
+                else
+                    match CombatSceneManager.Instance.Room with
+                    | :? RewardRoom as room ->
+                        room.SkipButtonPressed()
+                        Ok(Some "skipped")
+                    | _ -> Error(None)
+            | Cheat.Reset ->
+                UnityEngine.SceneManagement.SceneManager.LoadScene("ResetGameState")
+                Ok(Some "reset")
+            | Cheat.Money ->
+                Globals.Coins <- Globals.Coins + 100
+                Ok(Some "money")
+            | Cheat.Skulls ->
+                Globals.KillCount <- Globals.KillCount + 100
+                Ok(Some "meta")
+            | Cheat.Kill ->
+                CombatManager.Instance.KillEnemies()
+                CombatManager.Instance.TriggerTurn(CombatEnums.ActionEnum.Wait)
+                Ok(Some "killed")
+            | Cheat.Heal ->
+                Globals.Hero.FullHeal()
+                Ok(Some "healed")
         | Move dir ->
             combatError false
             |> chk (chkValid dir) "There is nothing in that direction"
@@ -434,14 +734,15 @@ type Game(plugin: MainClass) =
         | Consume _itemName -> Error(None)
         | BuyConsumable _consumableName -> Error(None)
         | BuySkill _skillName -> Error(None)
-        | BuyShopUpgrade _shopUpgradeName -> Error(None)
-        | BuyUnlock _unlockName -> Error(None)
+        | UnlockShopUpgrade _shopUpgradeName -> Error(None)
+        | UnlockConsumable _consumableName -> Error(None)
+        | UnlockSkill _skillName -> Error(None)
         | SellConsumable _consumableName -> Error(None)
         | AddAttackEffect _tileName -> Error(None)
         | AddTileEffect _tileName -> Error(None)
         | UpgradeTile _tileName -> Error(None)
         | RerollTile _tileName -> Error(None)
-        | TakeTile _tileName -> Error(None)
+        | PickTileReward _tileName -> Error(None)
         | SacrificeTile _tileName -> Error(None)
         // services
         | RerollRewards -> Error(None)
@@ -494,7 +795,7 @@ and [<BepInPlugin("org.pavluk.neuroshogun", "NeuroShogun", "1.0.0")>] MainClass(
 
     // wow i can't imagine this person is so lazy who would ever do so much on every frame smh my head
     member _.LateUpdate() =
-        game |> Option.iter (fun x -> x.ReregisterActions())
+        game |> Option.iter (fun x -> x.Update())
 
     member this.PreSceneLoad(name: string) =
         this.Logger.LogInfo($"Init {name}")
