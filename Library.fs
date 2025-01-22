@@ -48,37 +48,33 @@ type Observatory<'T when 'T: equality>(func: unit -> 'T) =
         value <- cur
         old <> cur
 
-[<RequireQualifiedAccess>]
-type Cheat =
-    | Quick
-    | SkipTitle
-    | ShortLocations
-    | Invulnerable
-    | TimeScale of value: float32
-    | Location of value: ProgressionEnums.LocationEnum option
-    | InitialRoomIndex of value: int
-    | CustomDay of value: int option
-    | CustomHero of value: AgentEnums.HeroEnum option
-    | Loadout of
+type Actions =
+    | [<Action("cheat_quick", "Cheat")>] CheatQuick
+    | [<Action("cheat_skip_title", "Cheat")>] CheatSkipTitle
+    | [<Action("cheat_short_locs", "Cheat")>] CheatShortLocations
+    | [<Action("cheat_invuln", "Cheat")>] CheatInvulnerable
+    | [<Action("cheat_ts", "Cheat")>] CheatTimeScale of value: float32
+    | [<Action("cheat_loc", "Cheat")>] CheatLocation of value: ProgressionEnums.LocationEnum option
+    | [<Action("cheat_initroom", "Cheat")>] CheatInitialRoomIndex of value: int
+    | [<Action("cheat_day", "Cheat")>] CheatCustomDay of value: int option
+    | [<Action("cheat_hero", "Cheat")>] CheatCustomHero of value: AgentEnums.HeroEnum option
+    | [<Action("cheat_loadout", "Cheat")>] CheatLoadout of
         n_rewards: int option *
         tiles: TileEnums.AttackEnum array option *
         attack_effects: TileEnums.AttackEffectEnum array option *
         skills: SkillEnums.SkillEnum array option *
         consumables: PotionsManager.PotionEnum array option
-    | Playground of
+    | [<Action("cheat_pg", "Cheat")>] CheatPlayground of
         grid: DeveloperUtilities.PlaygroundConfig.GridSize option *
         style: DeveloperUtilities.PlaygroundConfig.Style option *
         wave: AgentEnums.EnemyEnum array option *
         pool: AgentEnums.EnemyEnum array option
-    | Next
-    | Reset
-    | Money
-    | Skulls
-    | Kill
-    | Heal
-
-type Actions =
-    | Cheat of Cheat
+    | [<Action("cheat_next", "Cheat")>] CheatNext
+    | [<Action("cheat_reset", "Cheat")>] CheatReset
+    | [<Action("cheat_money", "Cheat")>] CheatMoney
+    | [<Action("cheat_skulls", "Cheat")>] CheatSkulls
+    | [<Action("cheat_kill", "Cheat")>] CheatKill
+    | [<Action("cheat_heal", "Cheat")>] CheatHeal
     // available in combat when you can move
     // conditions
     // - AllowHeroAction
@@ -399,7 +395,24 @@ type Game(plugin: MainClass) =
         then
             ()
         else
-            let mutable actions: Action list = []
+            let mutable actions: Action list =
+                [ (this.Action CheatQuick)
+                  (this.Action CheatSkipTitle)
+                  (this.Action CheatShortLocations)
+                  (this.Action CheatInvulnerable)
+                  (this.Action CheatTimeScale)
+                  (this.Action CheatLocation)
+                  (this.Action CheatInitialRoomIndex)
+                  (this.Action CheatCustomDay)
+                  (this.Action CheatCustomHero)
+                  (this.Action CheatLoadout)
+                  (this.Action CheatPlayground)
+                  (this.Action CheatNext)
+                  (this.Action CheatReset)
+                  (this.Action CheatMoney)
+                  (this.Action CheatSkulls)
+                  (this.Action CheatKill)
+                  (this.Action CheatHeal) ]
 
             if
                 CombatManager.Instance.CombatInProgress
@@ -481,107 +494,105 @@ type Game(plugin: MainClass) =
 
     override _.HandleAction(action: Actions) =
         match action with
-        | Cheat cheat ->
-            match cheat with
-            | Cheat.Quick ->
-                Globals.DeveloperUtils.Quick <- not Globals.DeveloperUtils.Quick
-                Ok(Some $"{Globals.DeveloperUtils.Quick}")
-            | Cheat.CustomDay None ->
-                Globals.DeveloperUtils._customDay <- false
-                Ok(None)
-            | Cheat.CustomDay(Some n) ->
-                Globals.DeveloperUtils._customDay <- true
-                Globals.DeveloperUtils.day <- System.Math.Clamp(n, 1, Globals.CurrentlyImplementedMaxDay)
-                Ok(Some($"{Globals.DeveloperUtils.day}"))
-            | Cheat.CustomHero None ->
-                Globals.DeveloperUtils._customHero <- false
-                Ok(None)
-            | Cheat.CustomHero(Some n) ->
-                Globals.DeveloperUtils._customHero <- true
-                Globals.DeveloperUtils.hero <- n
-                Ok(Some $"{Globals.DeveloperUtils.CustomHero} {Globals.DeveloperUtils.hero}")
-            | Cheat.InitialRoomIndex n ->
-                Globals.DeveloperUtils.initialRoomIndex <- n
-                Ok(Some $"{Globals.DeveloperUtils.initialRoomIndex}")
-            | Cheat.Invulnerable ->
-                Globals.DeveloperUtils._invulnerable <- not Globals.DeveloperUtils._invulnerable
-                Ok(Some $"{Globals.DeveloperUtils.Invulnerable}")
-            | Cheat.SkipTitle ->
-                Globals.DeveloperUtils._skipTitleScreen <- not Globals.DeveloperUtils._skipTitleScreen
-                Ok(Some $"{Globals.DeveloperUtils.SkipTitleScreen}")
-            | Cheat.TimeScale x ->
-                UnityEngine.Time.timeScale <- x
-                Ok(Some $"{UnityEngine.Time.timeScale}")
-            | Cheat.ShortLocations ->
-                Globals.DeveloperUtils._shortLocations <- not Globals.DeveloperUtils._shortLocations
-                Ok(Some $"{Globals.DeveloperUtils.ShortLocations}")
-            | Cheat.Loadout(None, None, None, None, None) ->
-                Globals.DeveloperUtils._customLoadout <- false
-                Ok(Some "disabled")
-            | Cheat.Loadout(n_rewards, tiles, attack_effects, skills, consumables) ->
-                let l = Globals.DeveloperUtils.loadout
-                let n_rewards = Option.defaultValue l.nRewards n_rewards
-                let tiles = Option.defaultValue l.tiles tiles
-                let effects = Option.defaultValue l.attackEffects attack_effects
-                let skills = Option.defaultValue l.skills skills
-                let consumables = Option.defaultValue l.consumables consumables
-                l.nRewards <- n_rewards
-                l.tiles <- tiles
-                l.attackEffects <- effects
-                l.skills <- skills
-                l.consumables <- consumables
-                Globals.DeveloperUtils._customLoadout <- true
+        | CheatQuick ->
+            Globals.DeveloperUtils.Quick <- not Globals.DeveloperUtils.Quick
+            Ok(Some $"{Globals.DeveloperUtils.Quick}")
+        | CheatCustomDay None ->
+            Globals.DeveloperUtils._customDay <- false
+            Ok(None)
+        | CheatCustomDay(Some n) ->
+            Globals.DeveloperUtils._customDay <- true
+            Globals.DeveloperUtils.day <- System.Math.Clamp(n, 1, Globals.CurrentlyImplementedMaxDay)
+            Ok(Some($"{Globals.DeveloperUtils.day}"))
+        | CheatCustomHero None ->
+            Globals.DeveloperUtils._customHero <- false
+            Ok(None)
+        | CheatCustomHero(Some n) ->
+            Globals.DeveloperUtils._customHero <- true
+            Globals.DeveloperUtils.hero <- n
+            Ok(Some $"{Globals.Developer} {Globals.DeveloperUtils.CustomHero} {Globals.DeveloperUtils.hero}")
+        | CheatInitialRoomIndex n ->
+            Globals.DeveloperUtils.initialRoomIndex <- n
+            Ok(Some $"{Globals.DeveloperUtils.initialRoomIndex}")
+        | CheatInvulnerable ->
+            Globals.DeveloperUtils._invulnerable <- not Globals.DeveloperUtils._invulnerable
+            Ok(Some $"{Globals.DeveloperUtils.Invulnerable}")
+        | CheatSkipTitle ->
+            Globals.DeveloperUtils._skipTitleScreen <- not Globals.DeveloperUtils._skipTitleScreen
+            Ok(Some $"{Globals.DeveloperUtils.SkipTitleScreen}")
+        | CheatTimeScale x ->
+            UnityEngine.Time.timeScale <- x
+            Ok(Some $"{UnityEngine.Time.timeScale}")
+        | CheatShortLocations ->
+            Globals.DeveloperUtils._shortLocations <- not Globals.DeveloperUtils._shortLocations
+            Ok(Some $"{Globals.DeveloperUtils.ShortLocations}")
+        | CheatLoadout(None, None, None, None, None) ->
+            Globals.DeveloperUtils._customLoadout <- false
+            Ok(Some "disabled")
+        | CheatLoadout(n_rewards, tiles, attack_effects, skills, consumables) ->
+            let l = Globals.DeveloperUtils.loadout
+            let n_rewards = Option.defaultValue l.nRewards n_rewards
+            let tiles = Option.defaultValue l.tiles tiles
+            let effects = Option.defaultValue l.attackEffects attack_effects
+            let skills = Option.defaultValue l.skills skills
+            let consumables = Option.defaultValue l.consumables consumables
+            l.nRewards <- n_rewards
+            l.tiles <- tiles
+            l.attackEffects <- effects
+            l.skills <- skills
+            l.consumables <- consumables
+            Globals.DeveloperUtils._customLoadout <- true
 
-                Ok(
-                    Some
-                        $"loadout {Globals.DeveloperUtils.CustomLoadout} {n_rewards}/{List.ofArray tiles}/{List.ofArray effects}/{List.ofArray skills}/{List.ofArray consumables}"
-                )
-            | Cheat.Location None ->
-                Globals.DeveloperUtils._customLocation <- false
-                Ok(None)
-            | Cheat.Location(Some x) ->
-                Globals.DeveloperUtils._customLocation <- true
-                Globals.DeveloperUtils.location <- x
-                Ok(Some $"{Globals.DeveloperUtils.CustomLocation} {Globals.DeveloperUtils.location}")
-            | Cheat.Playground(grid, style, wave, pool) ->
-                let c = Globals.DeveloperUtils.playgroundConfig
-                let grid = Option.defaultValue c.gridSize grid
-                let style = Option.defaultValue c.style style
-                let wave = Option.defaultValue c.wave wave
-                let pool = Option.defaultValue c.pool pool
-                c.gridSize <- grid
-                c.style <- style
-                c.wave <- wave
-                c.pool <- pool
+            Ok(
+                Some
+                    $"loadout {Globals.DeveloperUtils.CustomLoadout} {n_rewards}/{List.ofArray tiles}/{List.ofArray effects}/{List.ofArray skills}/{List.ofArray consumables}"
+            )
+        | CheatLocation None ->
+            Globals.DeveloperUtils._customLocation <- false
+            Ok(None)
+        | CheatLocation(Some x) ->
+            Globals.DeveloperUtils._customLocation <- true
+            Globals.DeveloperUtils.location <- x
+            Ok(Some $"{Globals.DeveloperUtils.CustomLocation} {Globals.DeveloperUtils.location}")
+        | CheatPlayground(grid, style, wave, pool) ->
+            let c = Globals.DeveloperUtils.playgroundConfig
+            let grid = Option.defaultValue c.gridSize grid
+            let style = Option.defaultValue c.style style
+            let wave = Option.defaultValue c.wave wave
+            let pool = Option.defaultValue c.pool pool
+            c.gridSize <- grid
+            c.style <- style
+            c.wave <- wave
+            c.pool <- pool
 
-                Ok(Some $"pg {grid}/{style}/{List.ofArray wave}/{List.ofArray pool}")
-            | Cheat.Next ->
-                if CombatManager.Instance.CombatInProgress then
-                    CombatManager.Instance.KillEnemies()
-                    EventsManager.Instance.EndOfCombat.Invoke()
-                    Ok(Some "killed")
-                else
-                    match CombatSceneManager.Instance.Room with
-                    | :? RewardRoom as room ->
-                        room.SkipButtonPressed()
-                        Ok(Some "skipped")
-                    | _ -> Error(None)
-            | Cheat.Reset ->
-                UnityEngine.SceneManagement.SceneManager.LoadScene("ResetGameState")
-                Ok(Some "reset")
-            | Cheat.Money ->
-                Globals.Coins <- Globals.Coins + 100
-                Ok(Some "money")
-            | Cheat.Skulls ->
-                Globals.KillCount <- Globals.KillCount + 100
-                Ok(Some "meta")
-            | Cheat.Kill ->
+            Ok(Some $"pg {grid}/{style}/{List.ofArray wave}/{List.ofArray pool}")
+        | CheatNext ->
+            if CombatManager.Instance.CombatInProgress then
                 CombatManager.Instance.KillEnemies()
-                CombatManager.Instance.TriggerTurn(CombatEnums.ActionEnum.Wait)
+                EventsManager.Instance.EndOfCombat.Invoke()
                 Ok(Some "killed")
-            | Cheat.Heal ->
-                Globals.Hero.FullHeal()
-                Ok(Some "healed")
+            else
+                match CombatSceneManager.Instance.Room with
+                | :? RewardRoom as room ->
+                    room.SkipButtonPressed()
+                    Ok(Some "skipped")
+                | _ -> Error(None)
+        | CheatReset ->
+            UnityEngine.SceneManagement.SceneManager.LoadScene("ResetGameState")
+            Ok(Some "reset")
+        | CheatMoney ->
+            Globals.Coins <- Globals.Coins + 100
+            Ok(Some "money")
+        | CheatSkulls ->
+            Globals.KillCount <- Globals.KillCount + 100
+            Ok(Some "meta")
+        | CheatKill ->
+            CombatManager.Instance.KillEnemies()
+            CombatManager.Instance.TriggerTurn(CombatEnums.ActionEnum.Wait)
+            Ok(Some "killed")
+        | CheatHeal ->
+            Globals.Hero.FullHeal()
+            Ok(Some "healed")
         | Move dir ->
             combatError false
             |> chk (chkValid dir) "There is nothing in that direction"
@@ -804,7 +815,7 @@ and [<BepInPlugin("org.pavluk.neuroshogun", "NeuroShogun", "1.0.0")>] MainClass(
             this.Logger.LogInfo("Initializing")
             initDone <- true
             Globals.DeveloperUtils._invulnerable <- true
-            Globals.DeveloperUtils._customLocation <- true
+            // Globals.DeveloperUtils._customLocation <- true
             Globals.DeveloperUtils._quick <- true
             Globals.DeveloperUtils._shortLocations <- true
         else

@@ -404,6 +404,56 @@ type ArraySchema(items: Schema) =
 
     override _.Clone() = new ArraySchema(items.Clone())
 
+type Action(name: string, description: string) =
+    inherit Attribute()
+    let mutable schema: ObjectSchema option = None
+    let mutable schema1: ObjectSchema option = None
+    let mutable desc = description
+    let mutable dirty = false
+
+    interface ISerializable with
+        override this.JsonValue() : JsonValue =
+            JsonValue.Record(
+                match this.Schema with
+                | None ->
+                    [| ("name", JsonValue.String this.Name)
+                       ("description", JsonValue.String this.Description) |]
+                | Some(schema) ->
+                    [| ("name", JsonValue.String this.Name)
+                       ("description", JsonValue.String this.Description)
+                       ("schema", schema.JsonValue()) |]
+            )
+
+    member _.Valid = not (schema |> Option.exists (fun x -> not x.Valid))
+    member _.Name = name
+    member _.InitialDescription = description
+
+    member _.Dirty
+        with get () = dirty || schema |> Option.exists (fun x -> x.Dirty)
+        and set value =
+            if value then
+                dirty <- true
+            else
+                dirty <- false
+                schema |> Option.iter (fun x -> x.Dirty <- false)
+
+    member _.InitialSchema
+        with get () = schema1
+        and set value = schema1 <- value
+
+    member _.Description
+        with get () = desc
+        and set value =
+            if desc <> value then
+                desc <- value
+                dirty <- true
+
+    member _.Schema
+        with get () = schema
+        and set value = schema <- value
+
+    member this.MutateProp (name: string) (func: Schema -> unit) = this.Schema.Value.MutateProp name func
+
 module internal TypeInfo =
     let pascalToSnake (s: string) : string =
         let s' = s.Replace("_", "/")
@@ -753,12 +803,12 @@ module internal TypeInfo =
             Error(DeserError.exc exc.Message path)
 
     let deserializeUnion
-        ((info, _attrs): Case array * Attribute array)
+        ((info, _attrs): (Case * Action) array * Attribute array)
         (name: string)
         (obj: JsonValue)
         : Result<obj option, DeserError> =
-        match info |> Array.tryFind (fun x -> x.caseName = name) with
-        | Some x ->
+        match info |> Array.tryFind (fun (_, act) -> act.Name = name) with
+        | Some(x, _) ->
             let res =
                 readProps
                     []
@@ -769,56 +819,6 @@ module internal TypeInfo =
 
             Result.map (fun res -> Some(FSharpValue.MakeUnion(x.info, res))) res
         | None -> Ok(None)
-
-type Action(name: string, description: string) =
-    inherit Attribute()
-    let mutable schema: ObjectSchema option = None
-    let mutable schema1: ObjectSchema option = None
-    let mutable desc = description
-    let mutable dirty = false
-
-    interface ISerializable with
-        override this.JsonValue() : JsonValue =
-            JsonValue.Record(
-                match this.Schema with
-                | None ->
-                    [| ("name", JsonValue.String this.Name)
-                       ("description", JsonValue.String this.Description) |]
-                | Some(schema) ->
-                    [| ("name", JsonValue.String this.Name)
-                       ("description", JsonValue.String this.Description)
-                       ("schema", schema.JsonValue()) |]
-            )
-
-    member _.Valid = not (schema |> Option.exists (fun x -> not x.Valid))
-    member _.Name = name
-    member _.InitialDescription = description
-
-    member _.Dirty
-        with get () = dirty || schema |> Option.exists (fun x -> x.Dirty)
-        and set value =
-            if value then
-                dirty <- true
-            else
-                dirty <- false
-                schema |> Option.iter (fun x -> x.Dirty <- false)
-
-    member _.InitialSchema
-        with get () = schema1
-        and set value = schema1 <- value
-
-    member _.Description
-        with get () = desc
-        and set value =
-            if desc <> value then
-                desc <- value
-                dirty <- true
-
-    member _.Schema
-        with get () = schema
-        and set value = schema <- value
-
-    member this.MutateProp (name: string) (func: Schema -> unit) = this.Schema.Value.MutateProp name func
 
 type Context = { message: string; silent: bool }
 type ActionsRegister = { actions: Action list }
@@ -875,7 +875,7 @@ type Game<'T>() =
     [<VolatileFieldAttribute>]
     let mutable ws: ClientWebSocket = new ClientWebSocket()
 
-    let acts0 =
+    let acts =
         match snd (TypeInfo.fromSystemType typeof<'T>) with
         | Union(a, b) ->
             (a
@@ -894,13 +894,11 @@ type Game<'T>() =
              b)
         | _ -> raise (new Exception("invalid actions type, must be a union"))
 
-    let acts = (Array.map fst (fst acts0), snd acts0)
-
     let actMap =
-        fst acts0 |> Array.map (fun (case, act) -> (case.info.Name, act)) |> Map.ofArray
+        fst acts |> Array.map (fun (case, act) -> (case.info.Name, act)) |> Map.ofArray
 
     let tagMap =
-        fst acts0 |> Array.map (fun (case, act) -> (case.info.Tag, act)) |> Map.ofArray
+        fst acts |> Array.map (fun (case, act) -> (case.info.Tag, act)) |> Map.ofArray
 
     let mutable ctorMap = Map.empty
 
@@ -996,7 +994,10 @@ type Game<'T>() =
 
                             match action with
                             | Ok(Some action) -> this.HandleAction(action :?> 'T)
-                            | Ok(None) -> Error(Some $"Unknown action name")
+                            | Ok(None) ->
+                                let names = acts |> fst |> Seq.map (snd >> _.Name) |> String.concat "\", \""
+
+                                Error(Some $"Unknown action name: {name}, expected one of: \"{names}\"")
                             | Error(err) -> Error(Some $"Invalid action data: {err}")
                         with exc ->
                             Error(Some $"Unhandled exception: {exc.Message}"))

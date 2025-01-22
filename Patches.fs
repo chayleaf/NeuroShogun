@@ -16,6 +16,6 @@ type public Patches() =
     static member public PreSceneLoad(sceneName: string) =
         MainClass.Instance.PreSceneLoad(sceneName)
 
-    [<HarmonyPatch(typeof<Globals>)>]
-    [<HarmonyPatch("Developer", MethodType.Getter)>]
-    static member GlobalsDeveloper() = true
+    [<HarmonyPatch(typeof<Globals>, "Developer", MethodType.Getter)>]
+    [<HarmonyPostfix>]
+    static member GlobalsDeveloper(__result: bool byref) = __result <- true
