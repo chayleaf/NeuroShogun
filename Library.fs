@@ -1,5 +1,6 @@
 ﻿namespace NeuroShogun
 
+open System.Collections
 open System.Reflection
 open System.Text.RegularExpressions
 open BepInEx
@@ -11,12 +12,29 @@ type Direction =
     | Left
     | Right
 
+(*
+wrap cutscenes:
+ShopkeeperGiveFreeConsumableCoroutine
+ItemBoughtSequenceBegin -> ItemBoughtSequenceOver
+*)
+
+type EnumeratorWrapper(obj: IEnumerator, onDone: unit -> unit) =
+    interface IEnumerator with
+        override _.Current = obj.Current
+
+        override _.MoveNext() =
+            obj.MoveNext()
+            || (onDone ()
+                false)
+
+        override _.Reset() = obj.Reset()
+
 module Dir =
     let ofStr s =
         match s with
         | "left" -> Left
         | "right" -> Right
-        | s -> raise (new System.Exception($"invalid direction in enum, expected left/right, got {s}"))
+        | s -> raise (System.Exception($"invalid direction in enum, expected left/right, got {s}"))
 
     let flip x =
         match x with
@@ -27,7 +45,7 @@ module Dir =
         match x with
         | Utils.Dir.Left -> Left
         | Utils.Dir.Right -> Right
-        | x -> raise (new System.Exception($"got invalid direction from game, expected left or right, got {x}"))
+        | x -> raise (System.Exception($"got invalid direction from game, expected left or right, got {x}"))
 
     let toGame x =
         match x with
@@ -170,14 +188,19 @@ type Actions =
     | [<Action("skip_rewards", "Skip the rewards")>] SkipRewards
     // campRoom.HeroSelection   .StartingDeckSelection   .RerollDeck
     // IS ON A DELAY of openDelay
-    | [<Action("select_hero", "Choose a hero to play as")>] SelectHero of heroName: string * deck: Deck
+    | [<Action("select_hero",
+               "Choose a hero to play as. Day is the ascension level, higher games are harder but unlock more.")>] SelectHero of
+        heroName: string *
+        deck: Deck *
+        day: int
     // i guess: GetVisibleUncoveredLocations()
     // and Navigate(dir), which does horizontal/vertical nav
     | [<Action("choose_path", "Proceed to the next location")>] ChoosePath of pathIndex: int
 
 type ConsumableContext =
-    { name: string
-      description: string
+    { slot: int option
+      name: string option
+      description: string option
       buyPriceCoins: int option
       unlockPriceSkulls: int option
       sellPriceCoins: int option }
@@ -200,7 +223,9 @@ type TileContext =
       attackEffect: string option
       tileEffect: string option
       buyPriceCoins: int option
-      unlockPriceSkulls: int option }
+      unlockPriceSkulls: int option
+      cooldown: int option
+      remainingCooldown: int option }
 
 type TileUpgradeContext =
     { upgradeCost: int option
@@ -292,6 +317,7 @@ type Context =
 type Game(plugin: MainClass) =
     inherit Game<Actions>()
 
+    let mutable inhibitForces = 0
     let stripTags s = Regex(@"\[[^\]]*\]").Replace(s, "")
 
     let chk (cond: bool) (error: string) res : Result<'T, string option> =
@@ -335,20 +361,109 @@ type Game(plugin: MainClass) =
         && Globals.Hero.SpecialMove.Cooldown.IsCharged
         && Globals.Hero.SpecialMove.Allowed(Globals.Hero, Dir.toGame dir)
 
+    let dioramaLine (text: string) =
+        let text, char =
+            match text with
+            | text when text.StartsWith "[L]" -> text.Substring 3, false
+            | text when text.StartsWith "[R]" -> text.Substring 3, true
+            | text -> text, false
+
+        (if char then "Character 2 says: " else "Character 1 says: ") + stripTags text
+
     let mutable initDone = false
+
+    member _.InhibitForces
+        with set value =
+            if value then
+                inhibitForces <- inhibitForces + 1
+            else
+                inhibitForces <- inhibitForces - 1
+
+    member this.ShowDialogue (agent: Agent) (text: string) =
+        match agent with
+        | :? Hero -> this.Context $"You, {stripTags Globals.Hero.Name}, say: {stripTags text}" false
+        | _ -> this.Context $"The enemy {stripTags agent.Name} says: {stripTags text}" false
+
+    member this.CreditsStart() =
+        this.Context
+            "Congratulations, you've beaten the game on day 7, the highest day! The credits are now playing."
+            false
+
+    member this.DioramaStart() =
+        this.Context
+            ($"You're viewing the ending cutscene."
+             + (if Globals.Day = 7 then
+                    "\n"
+                else
+                    " Beating the game on day 7 will unlock the entirety of the cutscene.\n")
+             + if Globals.Day = 1 then
+                   let name =
+                       Utils.LocalizationUtils.LocalizedString("ShopAndNPC", $"Diorama_Day_1_Title")
+
+                   $"Day 1: {name}"
+               else
+                   { 1 .. Globals.Day - 1 }
+                   |> Seq.map (fun day ->
+                       let name =
+                           Utils.LocalizationUtils.LocalizedString("ShopAndNPC", $"Diorama_Day_{day}_Title")
+
+                       Seq.append
+                           (seq { $"Day {day}: {name}" })
+                           (DioramaData.DioramaUtils.GetConversationLines day |> Seq.map dioramaLine))
+                   |> Seq.concat
+                   |> String.concat "\n")
+            false
+
+    member this.DioramaEnd() =
+        this.Context
+            ("The cutscene has ended."
+             + (if UnlocksManager.Instance.NewBestDayUnlockedThisRun() then
+                    (if Globals.Day < 7 then
+                         $" Day {Globals.Day + 1} unlocked."
+                     else
+                         "")
+                    + (if Globals.Day = 1 then " New islands unlocked." else "")
+                else
+                    ""))
+            false
+
+    member this.ShowDioramaDialogue(text: string) = this.Context (dioramaLine text) false
 
     member this.Update() =
         if not initDone && EventsManager.Instance <> null then
             initDone <- true
+            // attacker can be null
             let man = EventsManager.Instance
-            man.BeginRun.AddListener(fun () -> ())
-            man.CoinsUpdate.AddListener(fun _coins -> ())
-            man.MetaCurrencyUpdate.AddListener(fun _meta -> ())
-            man.MetaCurrencyReceived.AddListener(fun _meta -> ())
-            man.EndOfCombatTurn.AddListener(fun () -> ())
-            man.BeginningOfCombatTurn.AddListener(fun () -> ())
-            man.EnterRoom.AddListener(fun _room -> ())
-            man.ExitRoom.AddListener(fun _room -> ())
+            let ctx s = this.Context s false
+            man.BeginRun.AddListener(fun () -> ctx "You have started a new game!")
+            // man.CoinsUpdate.AddListener(fun _coins -> ())
+            // man.MetaCurrencyUpdate.AddListener(fun _meta -> ())
+
+            man.MetaCurrencyReceived.AddListener(fun meta ->
+                ctx $"You got {meta} skulls as a reward for defeating the boss")
+
+            man.EndOfCombatTurn.AddListener(fun () -> ctx "The enemies' turn has ended.")
+            man.BeginningOfCombatTurn.AddListener(fun () -> ctx "It's the enemies' turn...")
+
+            man.EnterRoom.AddListener(fun room ->
+                ctx (
+                    match room with
+                    | :? CampRoom as room ->
+                        "You are at the camp - a starting location. Here, you can access the metaprogression shop that unlocks new items for skulls, or you can start the game. A cat is lying around the metaprogression shop."
+                        + (if room.UnlocksShop.CanBuyAnything() then
+                               " You have items available for purchase in the shop."
+                           else
+                               " You can't currently purchase anything from the shop.")
+                    | :? ShogunBossRoom ->
+                        $"You, {Globals.Hero.Name}, have reached the final boss - this is the Shogun Showdown!"
+                    | :? BossRoom as room -> $"You, {Globals.Hero.Name}, have encountered a boss - {room.Boss.Name}"
+                    | :? CombatRoom -> $"You have entered a new location - prepare for a fight!"
+                    | :? RewardRoom -> $"You can now claim your rewards (or skip them)"
+                    | :? ShopRoom -> $"You have entered a shop."
+                    | _ -> $"You have entered a new room"
+                ))
+
+            man.ExitRoom.AddListener(fun _room -> ctx "You are moving on to the next location.")
             man.BeginningOfCombat.AddListener(fun _ -> ())
             man.EndOfCombat.AddListener(fun _ -> ())
             man.NewWaveSpawns.AddListener(fun _wave -> ())
@@ -761,7 +876,7 @@ type Game(plugin: MainClass) =
         | GetCoins -> Error(None)
         // skip
         | SkipRewards -> Error(None)
-        | SelectHero(_heroName, _altDeck) -> Error(None)
+        | SelectHero(_heroName, _altDeck, _day) -> Error(None)
         | ChoosePath _pathIndex -> Error(None)
 
     override _.LogError error = plugin.Logger.LogError $"{error}"
@@ -781,7 +896,7 @@ and [<BepInPlugin("org.pavluk.neuroshogun", "NeuroShogun", "1.0.0")>] MainClass(
     static val mutable private instance: MainClass
 
     static member Instance = MainClass.instance
-
+    member _.Game = game.Value
 
     member this.Awake() =
         try
@@ -795,7 +910,7 @@ and [<BepInPlugin("org.pavluk.neuroshogun", "NeuroShogun", "1.0.0")>] MainClass(
 
             game <-
                 Some(
-                    let game = new Game(this)
+                    let game = Game(this)
                     game.Start(Some("ws://127.0.0.1:8000"), cts.Token) |> ignore
                     game
                 )

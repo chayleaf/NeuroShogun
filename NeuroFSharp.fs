@@ -195,7 +195,7 @@ type Schema(ty: SchemaType) =
     member _.Type = ty
 
     abstract member Clone: unit -> Schema
-    default _.Clone() = new Schema(ty)
+    default _.Clone() = Schema(ty)
 
     abstract member JsonProps: unit -> (string * JsonValue) list
 
@@ -249,7 +249,7 @@ type StringSchema() =
             | None -> None
             | Some(x) -> Some <| Array.map id x
 
-        let mutable ret = new StringSchema()
+        let mutable ret = StringSchema()
         ret.InitialEnum <- cloneOptArr enum0
         ret.Enum <- cloneOptArr enum
         ret
@@ -296,8 +296,7 @@ type ObjectSchema(properties: (string * Schema) array) =
             | None -> None
             | Some(x) -> Some <| Array.map id x
 
-        let mutable ret =
-            new ObjectSchema(props |> Array.map (fun (k, v) -> (k, v.Clone())))
+        let mutable ret = ObjectSchema(props |> Array.map (fun (k, v) -> (k, v.Clone())))
 
         ret.Required <- cloneOptArr required
         ret
@@ -356,7 +355,7 @@ type IntegerSchema() =
         and set value = xmax <- value
 
     override _.Clone() =
-        let mutable ret = new IntegerSchema()
+        let mutable ret = IntegerSchema()
         ret.Minimum <- min
         ret.Maximum <- max
         ret.ExclusiveMinimum <- xmin
@@ -378,11 +377,11 @@ type IntegerSchema() =
 
 type NumberSchema() =
     inherit Schema(Number)
-    override _.Clone() = new NumberSchema()
+    override _.Clone() = NumberSchema()
 
 type BooleanSchema() =
     inherit Schema(Boolean)
-    override _.Clone() = new BooleanSchema()
+    override _.Clone() = BooleanSchema()
 
 type ArraySchema(items: Schema) =
     inherit Schema(Array)
@@ -402,7 +401,7 @@ type ArraySchema(items: Schema) =
     override this.JsonProps() : (string * JsonValue) list =
         ("items", this.Items.JsonValue()) :: base.JsonProps()
 
-    override _.Clone() = new ArraySchema(items.Clone())
+    override _.Clone() = ArraySchema(items.Clone())
 
 type Action(name: string, description: string) =
     inherit Attribute()
@@ -475,28 +474,27 @@ module internal TypeInfo =
 
     let rec schema (ty: TypeInfo) : Schema =
         match snd ty with
-        | PrimitiveBool -> new BooleanSchema()
-        | PrimitiveInt -> new IntegerSchema()
-        | PrimitiveFloat -> new NumberSchema()
-        | PrimitiveString -> new StringSchema()
+        | PrimitiveBool -> BooleanSchema()
+        | PrimitiveInt -> IntegerSchema()
+        | PrimitiveFloat -> NumberSchema()
+        | PrimitiveString -> StringSchema()
         | Option x -> schema x
         | Enum(x, _) ->
-            let mutable ret = new StringSchema()
+            let mutable ret = StringSchema()
             ret.InitialEnum <- Some(Array.map fst x)
             ret.Enum <- Some(Array.map fst x)
             ret
         | TypeInfo'.Array x
-        | List x -> new ArraySchema(schema x)
-        | Serializable -> raise (new Exception("can't generate a schema for arbitrary types"))
+        | List x -> ArraySchema(schema x)
+        | Serializable -> raise (Exception("can't generate a schema for arbitrary types"))
         | Record(x, _) ->
-            let mutable ret =
-                new ObjectSchema(x |> Array.map (fun x -> (x.propName, schema x.ty)))
+            let mutable ret = ObjectSchema(x |> Array.map (fun x -> (x.propName, schema x.ty)))
 
             ret.Required <- Some(x |> Array.filter (fun x -> not (optional x.ty)) |> Array.map _.propName)
             ret
         | Union(x, _) ->
             // this is not supposed to be used anywhere so just use same schema as enum
-            let mutable ret = new StringSchema()
+            let mutable ret = StringSchema()
             ret.InitialEnum <- Some(Array.map (fun x -> x.caseName) x)
             ret.Enum <- Some(Array.map (fun x -> x.caseName) x)
             ret
@@ -506,7 +504,7 @@ module internal TypeInfo =
             None
         else
             let mutable ret =
-                new ObjectSchema(ty.props |> Array.map (fun x -> (x.propName, schema x.ty)))
+                ObjectSchema(ty.props |> Array.map (fun x -> (x.propName, schema x.ty)))
 
             ret.Required <- Some(ty.props |> Array.filter (fun x -> not (optional x.ty)) |> Array.map _.propName)
             Some(ret)
@@ -673,7 +671,7 @@ module internal TypeInfo =
         | PrimitiveFloat when ty = typeof<float> -> JsonValue.Float(float (obj :?> float))
         | PrimitiveFloat when ty = typeof<float32> -> JsonValue.Float(float (obj :?> float32))
         | PrimitiveInt
-        | PrimitiveFloat -> raise (new Exception "not supposed to happen")
+        | PrimitiveFloat -> raise (Exception "not supposed to happen")
 
     let rec readProps (path: JsonPath) props jsonProps =
         let src = Map.ofArray jsonProps
@@ -892,7 +890,7 @@ type Game<'T>() =
                  act.Schema <- TypeInfo.unionSchema x
                  (x, act)),
              b)
-        | _ -> raise (new Exception("invalid actions type, must be a union"))
+        | _ -> raise (Exception("invalid actions type, must be a union"))
 
     let actMap =
         fst acts |> Array.map (fun (case, act) -> (case.info.Name, act)) |> Map.ofArray
@@ -967,7 +965,7 @@ type Game<'T>() =
             | None -> System.Environment.GetEnvironmentVariable("NEURO_SDK_WS_URL")
 
         if url = null then
-            raise (new Exception("Please set NEURO_SDK_WS_URL"))
+            raise (Exception("Please set NEURO_SDK_WS_URL"))
 
         let serverCmdTy = TypeInfo.fromSystemType typeof<ServerCommand>
         let gameName = this.Name
@@ -1114,7 +1112,7 @@ type Game<'T>() =
                                                 do!
                                                     (Async.AwaitTask(
                                                         ws.SendAsync(
-                                                            new ArraySegment<byte>(buffer, 0, buffer.Length),
+                                                            ArraySegment<byte>(buffer, 0, buffer.Length),
                                                             WebSocketMessageType.Text,
                                                             true,
                                                             ct
@@ -1133,12 +1131,12 @@ type Game<'T>() =
                     let ws1 = new ClientWebSocket()
                     ws <- ws1
                     this.LogDebug $"Connecting to {url}"
-                    do! ws1.ConnectAsync(new Uri(url), ct)
+                    do! ws1.ConnectAsync(Uri(url), ct)
                     this.LogDebug $"Connected to {url}"
 
                     let read () =
                         task {
-                            let buf = new ArraySegment<byte>(Array.zeroCreate 8192)
+                            let buf = ArraySegment<byte>(Array.zeroCreate 8192)
 
                             let ms = new MemoryStream()
                             let! res1 = ws1.ReceiveAsync(buf, ct)
