@@ -225,11 +225,7 @@ type StringSchema() =
         let prev = Option.defaultValue Array.empty enum
         let cur = values
 
-        if
-            Option.isNone enum
-            || prev.Length <> cur.Length
-            || Array.exists2 (fun a b -> a <> b) prev cur
-        then
+        if Option.isNone enum || prev.Length <> cur.Length || Array.exists2 (<>) prev cur then
             enum <- Some cur
             this.Dirty <- true
 
@@ -237,11 +233,11 @@ type StringSchema() =
         let prev = enum.Value
         let cur = Array.filter filter enum0.Value
 
-        if prev.Length <> cur.Length || Array.exists2 (fun a b -> a <> b) prev cur then
+        if prev.Length <> cur.Length || Array.exists2 (<>) prev cur then
             enum <- Some cur
             this.Dirty <- true
 
-    override _.Valid = not (enum |> Option.exists (fun x -> Array.length x = 0))
+    override _.Valid = not (enum |> Option.exists (Array.length >> (=) 0))
 
     override _.Clone() =
         let cloneOptArr x =
@@ -268,7 +264,7 @@ type ObjectSchema(properties: (string * Schema) array) =
     let mutable required: string array option = None
 
     override _.Dirty
-        with get () = base.Dirty || props |> Array.exists (fun (_, v) -> v.Dirty)
+        with get () = base.Dirty || props |> Array.exists (snd >> _.Dirty)
         and set value =
             base.Dirty <- value
 
@@ -279,7 +275,7 @@ type ObjectSchema(properties: (string * Schema) array) =
         match required with
         | None -> true
         | Some required ->
-            let invalid = props |> Array.filter (fun (_, v) -> not v.Valid)
+            let invalid = props |> Array.filter (snd >> _.Valid >> not)
             invalid |> Array.forall (fun (k, _) -> not (Array.contains k required))
 
     member _.Properties
@@ -302,7 +298,7 @@ type ObjectSchema(properties: (string * Schema) array) =
         ret
 
     member _.MutateProp (name: string) (func: Schema -> unit) =
-        props |> Array.find (fun (k, _) -> k = name) |> snd |> func
+        props |> Array.find (fst >> (=) name) |> snd |> func
 
     override this.JsonProps() =
         (this.Required
@@ -423,12 +419,12 @@ type Action(name: string, description: string) =
                        ("schema", schema.JsonValue()) |]
             )
 
-    member _.Valid = not (schema |> Option.exists (fun x -> not x.Valid))
+    member _.Valid = not (schema |> Option.exists (_.Valid >> not))
     member _.Name = name
     member _.InitialDescription = description
 
     member _.Dirty
-        with get () = dirty || schema |> Option.exists (fun x -> x.Dirty)
+        with get () = dirty || schema |> Option.exists _.Dirty
         and set value =
             if value then
                 dirty <- true
@@ -490,13 +486,13 @@ module internal TypeInfo =
         | Record(x, _) ->
             let mutable ret = ObjectSchema(x |> Array.map (fun x -> (x.propName, schema x.ty)))
 
-            ret.Required <- Some(x |> Array.filter (fun x -> not (optional x.ty)) |> Array.map _.propName)
+            ret.Required <- Some(x |> Array.filter (_.ty >> optional >> not) |> Array.map _.propName)
             ret
         | Union(x, _) ->
             // this is not supposed to be used anywhere so just use same schema as enum
             let mutable ret = StringSchema()
-            ret.InitialEnum <- Some(Array.map (fun x -> x.caseName) x)
-            ret.Enum <- Some(Array.map (fun x -> x.caseName) x)
+            ret.InitialEnum <- Some(Array.map _.caseName x)
+            ret.Enum <- Some(Array.map _.caseName x)
             ret
 
     let unionSchema (ty: Case) : ObjectSchema option =
@@ -506,7 +502,7 @@ module internal TypeInfo =
             let mutable ret =
                 ObjectSchema(ty.props |> Array.map (fun x -> (x.propName, schema x.ty)))
 
-            ret.Required <- Some(ty.props |> Array.filter (fun x -> not (optional x.ty)) |> Array.map _.propName)
+            ret.Required <- Some(ty.props |> Array.filter (_.ty >> optional >> not) |> Array.map _.propName)
             Some(ret)
 
     let rec propInfo (info: PropertyInfo) =
@@ -523,7 +519,7 @@ module internal TypeInfo =
 
     and fromSystemType (ty: Type) : TypeInfo =
         let objArr (arr: Array) : obj array =
-            [| 1 .. arr.Length |] |> Array.map (fun i -> arr.GetValue(i - 1))
+            [| 1 .. arr.Length |] |> Array.map ((-) 1 >> arr.GetValue)
 
         (ty,
          match ty with
@@ -634,7 +630,7 @@ module internal TypeInfo =
                      | :? UnionAttr as x -> Seq.singleton x
                      | _ -> Seq.empty)
                  |> Seq.concat
-                 |> Seq.tryPick (fun x -> x.TagName))
+                 |> Seq.tryPick _.TagName)
 
             match tagName with
             | Some(tagName) ->
@@ -732,18 +728,18 @@ module internal TypeInfo =
                     (Ok((0, arr)))
                 |> Result.map (fun x -> snd x :> obj)
             | (Union(info, _), JsonValue.String name) ->
-                match info |> Array.tryFind (fun x -> x.caseName = name) with
+                match info |> Array.tryFind (_.caseName >> (=) name) with
                 | Some x when x.props.Length = 0 -> Ok(FSharpValue.MakeUnion(x.info, Array.empty))
                 | Some _ -> Error(DeserError.caseData path)
-                | None -> Error(DeserError.case name (info |> Array.map (fun x -> x.caseName)) path)
+                | None -> Error(DeserError.case name (info |> Array.map _.caseName) path)
             | (Union(info, _), JsonValue.Record y) ->
-                match y |> Array.tryFind (fun (s, _) -> s = "command") with
+                match y |> Array.tryFind (fst >> (=) "command") with
                 | Some(_, JsonValue.String name) ->
-                    match info |> Array.tryFind (fun x -> x.caseName = name) with
+                    match info |> Array.tryFind (_.caseName >> (=) name) with
                     | Some x ->
                         let res = readProps path x.props y
                         Result.map (fun res -> FSharpValue.MakeUnion(x.info, res)) res
-                    | None -> Error(DeserError.case name (info |> Array.map (fun x -> x.caseName)) path)
+                    | None -> Error(DeserError.case name (info |> Array.map _.caseName) path)
                 | Some(_, x) -> Error(DeserError.unexpected x "string" (Prop "command" :: path))
                 | None -> Error(DeserError.missingField (Prop "command" :: path))
             | (Record(props, _), JsonValue.Record y) ->
@@ -751,7 +747,7 @@ module internal TypeInfo =
 
                 Result.map (fun res -> FSharpValue.MakeRecord(ty, res)) res
             | (Enum(info, _), JsonValue.String name) ->
-                match info |> Array.tryFind (fun (s, _) -> s = name) with
+                match info |> Array.tryFind (fst >> (=) name) with
                 | Some(_, x) -> Ok(x)
                 | None -> Error(DeserError.case name (Array.map fst info) path)
             | (Option _, JsonValue.Null) ->
@@ -805,7 +801,7 @@ module internal TypeInfo =
         (name: string)
         (obj: JsonValue)
         : Result<obj option, DeserError> =
-        match info |> Array.tryFind (fun (_, act) -> act.Name = name) with
+        match info |> Array.tryFind (snd >> _.Name >> (=) name) with
         | Some(x, _) ->
             let res =
                 readProps
@@ -938,7 +934,7 @@ type Game<'T>() =
 
     member _.Send(cmd: ClientCommand) = mp.Value.Post(MsgCmd cmd)
 
-    member this.Context (message: string) (silent: bool) =
+    member this.Context (silent: bool) (message: string) =
         this.Send(Context(this.Name, { message = message; silent = silent }))
 
     member this.Force(data: ActionsForce) =
@@ -1026,8 +1022,7 @@ type Game<'T>() =
                             | MsgRetain actions ->
                                 let new_reg = actions |> List.filter _.Valid |> List.map _.Name |> Set.ofList
 
-                                let unreg =
-                                    registered |> Seq.filter (fun x -> not (new_reg.Contains x)) |> List.ofSeq
+                                let unreg = registered |> Seq.filter (new_reg.Contains >> not) |> List.ofSeq
 
                                 // map it again for sanitization
                                 mapCommand (MsgCmd(Actions_Unregister(gameName, { action_names = unreg })))

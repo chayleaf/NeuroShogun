@@ -25,7 +25,7 @@ type public Patches() =
     [<HarmonyPostfix>]
     static member PostShopkeeperGiveFreeConsumableCoroutine(__result: IEnumerator byref) =
         MainClass.Instance.Game.InhibitForces <- true
-        __result <- EnumeratorWrapper(__result, (fun () -> MainClass.Instance.Game.InhibitForces <- false))
+        __result <- EnumeratorWrapper(__result, ignore, (fun () -> MainClass.Instance.Game.InhibitForces <- false))
 
     [<HarmonyPatch(typeof<DioramaManager>, "Start")>]
     [<HarmonyPrefix>]
@@ -38,3 +38,56 @@ type public Patches() =
     [<HarmonyPatch(typeof<ScrollingCredits>, "Start")>]
     [<HarmonyPrefix>]
     static member CreditsStart() = MainClass.Instance.Game.CreditsStart()
+
+    [<HarmonyPatch(typeof<Cat>, "WaitAndMaoAndPurr")>]
+    [<HarmonyPostfix>]
+    static member MeowMeowLol(__result: IEnumerator byref) =
+        __result <-
+            EnumeratorWrapper(
+                __result,
+                (fun i ->
+                    match i with
+                    | 0 ->
+                        MainClass.Instance.Game.ShowCatDialogue(
+                            Utils.LocalizationUtils.LocalizedString("ShopAndNPC", "Cat_Mao")
+                        )
+                    | 1 ->
+                        MainClass.Instance.Game.ShowCatDialogue(
+                            Utils.LocalizationUtils.LocalizedString("ShopAndNPC", "Cat_Purr")
+                        )
+                    | _ -> MainClass.Instance.Logger.LogWarning "What is the cat doing?"),
+                id
+            )
+
+        MainClass.Instance.Game.CreditsStart()
+
+    [<HarmonyPatch(typeof<NobunagaBoss>, "AddVulnerableCells")>]
+    [<HarmonyPostfix>]
+    static member NobunagaAttacked(__vulnerableCells: Generic.List<Cell>) =
+        MainClass.Instance.Game.NobunagaCells(__vulnerableCells |> List.ofSeq)
+
+    [<HarmonyPatch(typeof<NobunagaBoss>, nameof Unchecked.defaultof<NobunagaBoss>.ReceiveAttack)>]
+    [<HarmonyPrefix>]
+    static member NobunagaAttacked(hit: Hit, attacker: Agent, __instance: NobunagaBoss) =
+        MainClass.Instance.Game.ReceiveAttack(__instance, hit, attacker)
+
+    [<HarmonyPatch(typeof<Agent>, nameof Unchecked.defaultof<Agent>.ReceiveAttack)>]
+    [<HarmonyPrefix>]
+    static member AgentAttacked(hit: Hit, attacker: Agent, __instance: Agent, __vulnerableCells: Generic.List<Cell>) =
+        if not (__instance :? NobunagaBoss) then
+            MainClass.Instance.Game.ReceiveAttack(__instance, hit, attacker)
+
+    [<HarmonyPatch(typeof<TrapAttack>, nameof Unchecked.defaultof<TrapAttack>.Begin)>]
+    [<HarmonyPrefix>]
+    static member TrapInit(__instance: Trap) =
+        MainClass.Instance.Game.TrapPlaced __instance
+
+    [<HarmonyPatch(typeof<TrapAttack>, nameof Unchecked.defaultof<TrapAttack>.Begin)>]
+    [<HarmonyPrefix>]
+    static member TrapAttack(agent: Agent) =
+        MainClass.Instance.Game.TrapAttack agent
+
+    [<HarmonyPatch(typeof<TrapAttack>, nameof Unchecked.defaultof<TrapAttack>.Begin)>]
+    [<HarmonyPostfix>]
+    static member TrapWentOff(__instance: Trap, __alreadyTriggered: bool) =
+        MainClass.Instance.Game.TrapGone __instance

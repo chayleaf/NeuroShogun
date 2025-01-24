@@ -1,5 +1,6 @@
 ﻿namespace NeuroShogun
 
+open System
 open System.Collections
 open System.Reflection
 open System.Text.RegularExpressions
@@ -18,23 +19,31 @@ ShopkeeperGiveFreeConsumableCoroutine
 ItemBoughtSequenceBegin -> ItemBoughtSequenceOver
 *)
 
-type EnumeratorWrapper(obj: IEnumerator, onDone: unit -> unit) =
+type EnumeratorWrapper(obj: IEnumerator, onNext: int -> unit, onDone: unit -> unit) =
+    let mutable count = 0
+
     interface IEnumerator with
         override _.Current = obj.Current
 
         override _.MoveNext() =
-            obj.MoveNext()
-            || (onDone ()
-                false)
+            if obj.MoveNext() then
+                onNext count
+                count <- count + 1
+                true
+            else
+                onDone ()
+                false
 
-        override _.Reset() = obj.Reset()
+        override _.Reset() =
+            count <- 0
+            obj.Reset()
 
 module Dir =
     let ofStr s =
         match s with
         | "left" -> Left
         | "right" -> Right
-        | s -> raise (System.Exception($"invalid direction in enum, expected left/right, got {s}"))
+        | s -> raise (Exception($"invalid direction in enum, expected left/right, got {s}"))
 
     let flip x =
         match x with
@@ -45,7 +54,7 @@ module Dir =
         match x with
         | Utils.Dir.Left -> Left
         | Utils.Dir.Right -> Right
-        | x -> raise (System.Exception($"got invalid direction from game, expected left or right, got {x}"))
+        | x -> raise (Exception($"got invalid direction from game, expected left or right, got {x}"))
 
     let toGame x =
         match x with
@@ -77,9 +86,9 @@ type Actions =
     | [<Action("cheat_day", "Cheat")>] CheatCustomDay of value: int option
     | [<Action("cheat_hero", "Cheat")>] CheatCustomHero of value: AgentEnums.HeroEnum option
     | [<Action("cheat_loadout", "Cheat")>] CheatLoadout of
-        n_rewards: int option *
+        nRewards: int option *
         tiles: TileEnums.AttackEnum array option *
-        attack_effects: TileEnums.AttackEffectEnum array option *
+        attackEffects: TileEnums.AttackEffectEnum array option *
         skills: SkillEnums.SkillEnum array option *
         consumables: PotionsManager.PotionEnum array option
     | [<Action("cheat_pg", "Cheat")>] CheatPlayground of
@@ -216,15 +225,18 @@ type SkillContext =
       buyPriceCoins: int option
       unlockPriceSkulls: int option }
 
+type EffectContext = { name: string; description: string }
+
 type TileContext =
     { name: string
       // desc
-      attack: string
-      attackEffect: string option
-      tileEffect: string option
+      description: string
+      attackEffect: EffectContext option
+      tileEffect: EffectContext option
       buyPriceCoins: int option
       unlockPriceSkulls: int option
       cooldown: int option
+      inAttackQueue: bool
       remainingCooldown: int option }
 
 type TileUpgradeContext =
@@ -250,61 +262,88 @@ type ShopContext =
 // "{current}/{max}"
 type HpContext = string
 
+type SpecialMoveContext =
+    { name: string
+      // desc
+      description: string
+      cooldown: int
+      remainingCooldown: int }
+
 type PlayerContext =
-    { coins: int option
-      skullCurrency: int option
+    { name: string
+      coins: int
+      skullMetaCurrency: int
       consumables: ConsumableContext list
-      tiles: TileContext list
       skills: SkillContext list
-      hp: HpContext }
+      tiles: TileContext list
+      specialMove: SpecialMoveContext
+      attackQueue: string list
+      hp: HpContext
+      [<SkipSerializingIfEquals 0>]
+      remainingFrozenDuration: int
+      [<SkipSerializingIfEquals false>]
+      shield: bool
+      [<SkipSerializingIfEquals false>]
+      remainingPoisonedDuration: int
+      [<SkipSerializingIfEquals false>]
+      cursed: bool }
 
 type LocationContext =
     { island: string
       name: string
-      shop1: string
-      shop2: string }
-
-type PathsContext =
-    { up: LocationContext
-      down: LocationContext
-      left: LocationContext
-      right: LocationContext }
+      shop1: string option
+      shop2: string option }
 
 [<RequireQualifiedAccess>]
 type Intention =
-    | MoveRight
     | MoveLeft
-    | TurnRight
+    | MoveRight
+    | LeapLeft
+    | LeapRight
     | TurnLeft
+    | TurnRight
     | PlayTile
     | Attack
+    | Wait
 
 type EnemyContext =
     { name: string
       description: string
       traits: string list option
-      elite: string
-      attack_queue: Tile list
-      intention: string option
+      elite: string option
+      attackQueue: TileContext list
+      intention: Intention
       hp: HpContext
-      boss: bool option
-      bossPhase: int option
-      onlyVulnerableInSpotlightCells: bool option
-      flyingAndImmune: bool
-      iceResistance: bool option }
+      [<SkipSerializingIfEquals 0>]
+      remainingFrozenDuration: int
+      [<SkipSerializingIfEquals false>]
+      shield: bool
+      [<SkipSerializingIfEquals false>]
+      remainingPoisonedDuration: int
+      [<SkipSerializingIfEquals false>]
+      cursed: bool
+      [<SkipSerializingIfEquals false>]
+      boss: bool
+      [<SkipSerializingIfEquals false>]
+      iceResistance: bool
+      [<SkipSerializingIfEquals false>]
+      pushResistance: bool }
 
 type CellContext =
     { xPos: int
-      // corrupted soul
-      yPos: int option
       // nobunaga
       spotlight: bool option
       enemy: EnemyContext option
-      youAreHere: bool option }
+      [<SkipSerializingIfEquals 0>]
+      traps: int
+      // corrupted soul
+      flyingEnemy: EnemyContext option
+      [<SkipSerializingIfEquals false>]
+      youAreHere: bool }
 
 type MapContext =
     { currentLocation: LocationContext
-      paths: PathsContext }
+      paths: LocationContext list }
 
 type Context =
     { player: PlayerContext
@@ -314,24 +353,217 @@ type Context =
       tileSacrificeRewardCoins: int option
       gridCells: CellContext list option }
 
-type Game(plugin: MainClass) =
-    inherit Game<Actions>()
-
-    let mutable inhibitForces = 0
+module Context =
     let stripTags s = Regex(@"\[[^\]]*\]").Replace(s, "")
 
-    let chk (cond: bool) (error: string) res : Result<'T, string option> =
-        res |> Result.bind (fun x -> if cond then Ok x else Error(Some error))
+    let consumable (slot: int option) (potion: Potion) : ConsumableContext =
+        { name = Some(stripTags potion.Name)
+          description = Some(stripTags potion.Description)
+          slot = slot
+          buyPriceCoins = None
+          unlockPriceSkulls = None
+          sellPriceCoins =
+            if Option.isSome slot && potion.CanBeSold then
+                Some(
+                    potion.BasePriceForHeroSelling
+                    + if PotionsManager.Instance.RogueRetail then 1 else 0
+                )
+            else
+                None }
 
     let deck () : (string * Tile) seq =
         TilesManager.Instance.Deck
-        |> Seq.map (fun tile -> (tile.Attack.Name, tile))
+        |> Seq.map (fun tile -> (stripTags tile.Attack.Name, tile))
         |> (Map.empty
             |> Seq.mapFold (fun state (name, tile) ->
                 match state.TryFind name with
                 | Some count -> (($"{name} ({count + 1})", tile), Map.add name (count + 1) state)
                 | None -> ((name, tile), Map.add name 1 state)))
         |> fst
+
+    let attackEffect (eff: TileEnums.AttackEffectEnum) : EffectContext option =
+        if eff = TileEnums.AttackEffectEnum.None then
+            None
+        else
+            Some
+                { name = stripTags (TileEnums.TileEnumsUtils.LocalizedAttackEffectName(eff))
+                  description = stripTags (TileEnums.TileEnumsUtils.LocalizedAttackEffectDescription(eff)) }
+
+    let tileEffect (eff: TileEnums.TileEffectEnum) : EffectContext option =
+        if eff = TileEnums.TileEffectEnum.None then
+            None
+        else
+            Some
+                { name = stripTags (TileEnums.TileEnumsUtils.LocalizedTileEffectName(eff))
+                  description = stripTags (TileEnums.TileEnumsUtils.LocalizedTileEffectDescription(eff)) }
+
+    let tile (name: string option) (tile: Tile) : TileContext =
+        { name = stripTags (Option.defaultValue tile.Attack.Name name)
+          description = stripTags tile.Attack.Description
+          attackEffect = attackEffect tile.Attack.AttackEffect
+          tileEffect = tileEffect tile.Attack.TileEffect
+          buyPriceCoins = None
+          unlockPriceSkulls = None
+          cooldown = Some tile.Attack.Cooldown
+          remainingCooldown = Some tile.TurnsBeforeCharged
+          inAttackQueue = tile.TileContainer :? AttackQueueTileContainer }
+
+    let skill (skill: Skill) : SkillContext =
+        { name = skill.Name
+          description = skill.Description
+          buyPriceCoins = None
+          unlockPriceSkulls = None }
+
+    let hp (s: AgentStats) : HpContext = $"{s.HP}/{s.maxHP}"
+
+    let specialMove (hero: Hero) : SpecialMoveContext =
+        { name = stripTags hero.SpecialAbilityName
+          description = stripTags hero.SpecialAbilityDescription
+          cooldown = hero.SpecialMove.Cooldown.Cooldown
+          remainingCooldown = hero.SpecialMove.Cooldown.Cooldown - hero.SpecialMove.Cooldown.Charge }
+
+    let enemy (enemy: Enemy) : EnemyContext =
+        let traits =
+            typeof<Enemy>
+                .GetProperty("EnemyTraits", BindingFlags.NonPublic ||| BindingFlags.Instance)
+                .GetValue(enemy)
+            :?> AgentEnums.EnemyTraitsEnum array
+
+        { name = stripTags enemy.Name
+          description = stripTags enemy.Description
+          traits =
+            if Array.isEmpty traits then
+                None
+            else
+                traits
+                |> Array.map AgentEnums.AgentEnumsUtils.EnemyTraitDescription
+                |> List.ofArray
+                |> Some
+          elite =
+            if enemy.EliteType = AgentEnums.EliteTypeEnum.None then
+                None
+            else
+                Some(AgentEnums.AgentEnumsUtils.EliteDescription enemy.EliteType)
+          intention =
+            match enemy.Action with
+            | CombatEnums.ActionEnum.Wait -> Intention.Wait
+            | CombatEnums.ActionEnum.MoveLeft when (enemy :? FumikoBoss || enemy :? StriderEnemy) -> Intention.LeapLeft
+            | CombatEnums.ActionEnum.MoveLeft -> Intention.MoveLeft
+            | CombatEnums.ActionEnum.MoveRight when (enemy :? FumikoBoss || enemy :? StriderEnemy) ->
+                Intention.LeapRight
+            | CombatEnums.ActionEnum.MoveRight -> Intention.MoveRight
+            | CombatEnums.ActionEnum.Attack -> Intention.Attack
+            | CombatEnums.ActionEnum.PlayTile -> Intention.PlayTile
+            | CombatEnums.ActionEnum.FlipLeft -> Intention.TurnLeft
+            | CombatEnums.ActionEnum.FlipRight -> Intention.TurnRight
+            | _ -> Intention.Wait
+          boss = enemy :? Boss
+          attackQueue = enemy.AttackQueue.TCC.Tiles |> Seq.map (tile None) |> List.ofSeq
+          iceResistance = not enemy.Freezable
+          pushResistance = not enemy.Movable
+          hp = hp enemy.AgentStats
+          remainingFrozenDuration = enemy.AgentStats.ice
+          shield = enemy.AgentStats.shield
+          remainingPoisonedDuration = enemy.AgentStats.poison
+          cursed = enemy.AgentStats.curse }
+
+    let cell (nobunaga: Cell list) (traps: (Cell * Trap) list) (cell: Cell) : CellContext =
+        let flying =
+            match CombatSceneManager.Instance.Room with
+            | :? CorruptedSoulBossRoom as room when room.Boss <> null ->
+                let boss = room.Boss :?> CorruptedSoulBoss
+
+                if cell = boss.PseudoCell && not (boss.Animator.GetBool("IsDown")) then
+                    Some(enemy boss)
+                else
+                    None
+            | _ -> None
+
+        let enemy, you =
+            match cell.Agent with
+            | null -> None, false
+            | :? Hero -> None, true
+            | x -> Some(enemy (x :?> Enemy)), false
+
+        { xPos = cell.IndexInGrid
+          spotlight =
+            if List.isEmpty nobunaga then
+                None
+            else
+                Some(List.contains cell nobunaga)
+          enemy = enemy
+          traps = traps |> List.filter (fst >> (=) cell) |> List.fold (fun n _ -> n + 1) 0
+          // corrupted soul
+          flyingEnemy = flying
+          youAreHere = you }
+
+    let player () : PlayerContext =
+        let hero = Globals.Hero
+        let pm = PotionsManager.Instance
+        let sm = SkillsManager.Instance
+        let deck = deck ()
+
+        { name = stripTags hero.Name
+          coins = Globals.Coins
+          skullMetaCurrency = Globals.KillCount
+          consumables = pm.HeldPotions |> Array.mapi (fun i x -> consumable (Some i) x) |> List.ofArray
+          tiles = deck |> Seq.map (fun (s, x) -> tile (Some s) x) |> List.ofSeq
+          specialMove = specialMove hero
+          attackQueue =
+            deck
+            |> Seq.filter (fun (_, x) -> x.TileContainer :? AttackQueueTileContainer)
+            |> Seq.map fst
+            |> List.ofSeq
+          skills = sm.Skills |> Seq.map skill |> List.ofSeq
+          hp = hp hero.AgentStats
+          remainingFrozenDuration = hero.AgentStats.ice
+          shield = hero.AgentStats.shield
+          remainingPoisonedDuration = hero.AgentStats.poison
+          cursed = hero.AgentStats.curse }
+
+    let location (loc: MapLocation) : LocationContext =
+        let loc = loc.location
+
+        let shop =
+            fun (comp: ShopComponent) -> Utils.LocalizationUtils.LocalizedString("Locations", comp.technicalName)
+
+        let shop1, shop2 =
+            match loc with
+            | :? ShopLocation as loc -> Some(shop loc.leftShopComponent), Some(shop loc.rightShopComponent)
+            | _ -> None, None
+
+        { name = stripTags loc.Name
+          island =
+            match loc.island with
+            | ProgressionEnums.IslandEnum.green -> "Green"
+            | ProgressionEnums.IslandEnum.brown -> "Brown"
+            | ProgressionEnums.IslandEnum.red -> "Red"
+            | ProgressionEnums.IslandEnum.purple -> "Purple"
+            | ProgressionEnums.IslandEnum.white -> "White"
+            | ProgressionEnums.IslandEnum.gray -> "Gray"
+            | ProgressionEnums.IslandEnum.darkGreen -> "Dark Green"
+            | ProgressionEnums.IslandEnum.shogun -> "Shogun"
+            | _ -> "???"
+          shop1 = shop1
+          shop2 = shop2 }
+
+    let map (map: Map) : MapContext =
+        { currentLocation = location map.CurrentMapLocation
+          paths =
+            map.MapLocations
+            |> Seq.filter _.Reachable
+            |> Seq.filter _.Uncovered
+            |> Seq.map location
+            |> List.ofSeq }
+
+type Game(plugin: MainClass) =
+    inherit Game<Actions>()
+
+    let mutable inhibitForces = 0
+    let stripTags = Context.stripTags
+
+    let chk (cond: bool) (error: string) res : Result<'T, string option> =
+        res |> Result.bind (fun x -> if cond then Ok x else Error(Some error))
 
     let combatError' () =
         Ok()
@@ -368,9 +600,12 @@ type Game(plugin: MainClass) =
             | text when text.StartsWith "[R]" -> text.Substring 3, true
             | text -> text, false
 
-        (if char then "Character 2 says: " else "Character 1 says: ") + stripTags text
+        (if char then "Character 2: " else "Character 1: ") + stripTags text
 
     let mutable initDone = false
+    let mutable nobunagaCells = List.empty
+    let mutable trapCells = List.empty
+    let mutable trapCell = null
 
     member _.InhibitForces
         with set value =
@@ -379,18 +614,70 @@ type Game(plugin: MainClass) =
             else
                 inhibitForces <- inhibitForces - 1
 
+    member _.TrapGone(trap: Trap) =
+        trapCells <- trapCells |> List.filter (snd >> (<>) trap)
+
+    member _.TrapPlaced(trap: Trap) =
+        trapCells <- (trapCell, trap) :: trapCells
+
+    member _.TrapAttack(agent: Agent) =
+        trapCell <- agent.Cell.Neighbour(agent.FacingDir, 1)
+
+    member _.NobunagaCells(cells: Cell list) = nobunagaCells <- cells
+
+    member this.ReceiveAttack(agent: Agent, hit: Hit, attacker: Agent) =
+        let atkName =
+            match attacker with
+            | :? Hero -> "you"
+            | null -> "poison/thorns/trap/shockwave/karma (figure it out yourself)"
+            | _ -> attacker.Name
+
+        let effects =
+            (if agent.AgentStats.shield then
+                 " The attack is nullified by the shield, the shield is now gone."
+             elif agent.AgentStats.curse then
+                 " The attack damage is doubled because of the curse."
+             else
+                 "")
+            + (let mutable dmg = hit.Damage
+
+               if agent.AgentStats.curse then
+                   dmg <- dmg * 2
+
+               if hit.IsNonLethal then
+                   dmg <- min dmg (agent.AgentStats.HP - 1)
+
+               if agent.AgentStats.shield then
+                   dmg <- 0
+
+               match dmg with
+               | 0 -> ""
+               | x when x < agent.AgentStats.HP -> $" HP: {agent.AgentStats.HP}->{agent.AgentStats.HP - x}"
+               | _ -> " The hit is lethal.")
+
+        match agent with
+        | :? Hero -> $"You have been hit by {atkName} for {hit.Damage} damage.{effects}"
+        | :? NobunagaBoss when nobunagaCells |> List.exists ((=) agent.Cell) |> not ->
+            $"Nobunaga got hit by {atkName}, but the attack didn't seem to have any effect..."
+        | _ -> $"{attacker.Name} has been hit by {atkName}.{effects}"
+        |> this.Context false
+
+    member this.ShowCatDialogue(text: string) =
+        this.Context false $"The cat says: {stripTags text}"
+
     member this.ShowDialogue (agent: Agent) (text: string) =
         match agent with
-        | :? Hero -> this.Context $"You, {stripTags Globals.Hero.Name}, say: {stripTags text}" false
-        | _ -> this.Context $"The enemy {stripTags agent.Name} says: {stripTags text}" false
+        | :? Hero -> this.Context false $"You, {stripTags Globals.Hero.Name}, say: {stripTags text}"
+        | _ -> this.Context false $"The enemy {stripTags agent.Name} says: {stripTags text}"
 
     member this.CreditsStart() =
         this.Context
-            "Congratulations, you've beaten the game on day 7, the highest day! The credits are now playing."
             false
+            "Congratulations, you've beaten the game on day 7, the highest day! The credits are now playing."
 
     member this.DioramaStart() =
         this.Context
+            false
             ($"You're viewing the ending cutscene."
              + (if Globals.Day = 7 then
                     "\n"
@@ -412,10 +699,10 @@ type Game(plugin: MainClass) =
                            (DioramaData.DioramaUtils.GetConversationLines day |> Seq.map dioramaLine))
                    |> Seq.concat
                    |> String.concat "\n")
-            false
 
     member this.DioramaEnd() =
         this.Context
+            false
             ("The cutscene has ended."
              + (if UnlocksManager.Instance.NewBestDayUnlockedThisRun() then
                     (if Globals.Day < 7 then
@@ -425,16 +712,15 @@ type Game(plugin: MainClass) =
                     + (if Globals.Day = 1 then " New islands unlocked." else "")
                 else
                     ""))
-            false
 
-    member this.ShowDioramaDialogue(text: string) = this.Context (dioramaLine text) false
+    member this.ShowDioramaDialogue(text: string) = this.Context false (dioramaLine text)
 
     member this.Update() =
         if not initDone && EventsManager.Instance <> null then
             initDone <- true
             // attacker can be null
             let man = EventsManager.Instance
-            let ctx s = this.Context s false
+            let ctx = this.Context false
             man.BeginRun.AddListener(fun () -> ctx "You have started a new game!")
             // man.CoinsUpdate.AddListener(fun _coins -> ())
             // man.MetaCurrencyUpdate.AddListener(fun _meta -> ())
@@ -463,30 +749,59 @@ type Game(plugin: MainClass) =
                     | _ -> $"You have entered a new room"
                 ))
 
-            man.ExitRoom.AddListener(fun _room -> ctx "You are moving on to the next location.")
-            man.BeginningOfCombat.AddListener(fun _ -> ())
-            man.EndOfCombat.AddListener(fun _ -> ())
-            man.NewWaveSpawns.AddListener(fun _wave -> ())
-            man.BeginBossFight.AddListener(fun () -> ())
-            man.EndBossFight.AddListener(fun () -> ())
-            man.IslandCleared.AddListener(fun struct (_island, _) -> ())
-            man.HeroStampObtained.AddListener(fun _stamp -> ())
-            man.GameOver.AddListener(fun _win -> ())
-            man.ShogunDefeated.AddListener(fun () -> ())
-            man.EnemyDied.AddListener(fun _enemy -> ())
-            man.BossDied.AddListener(fun _boss -> ())
-            man.EnemyFriendlyKill.AddListener(fun () -> ())
-            man.ComboKill.AddListener(fun _enemy -> ())
-            man.PreciseKill.AddListener(fun _enemy -> ())
-            man.PickupCreated.AddListener(fun _pickup -> ())
-            man.PickupPickedUp.AddListener(fun _pickup -> ())
-            man.TileUpgraded.AddListener(fun _tile -> ())
-            man.NewTilePicked.AddListener(fun _tile -> ())
-            man.ShopBegin.AddListener(fun () -> ())
-            man.UnlocksShopBegin.AddListener(fun () -> ())
-            man.ShopEnd.AddListener(fun () -> ())
-            man.Attack.AddListener(fun _attacker _attacked _hit -> ())
-            man.SkillTriggered.AddListener(fun _skill -> ())
+            man.ExitRoom.AddListener(fun _room ->
+                nobunagaCells <- List.empty
+                trapCells <- List.empty)
+            // man.BeginningOfCombat.AddListener(fun _ -> ())
+            // man.EndOfCombat.AddListener(fun _ -> ())
+            man.NewWaveSpawns.AddListener(fun wave -> ctx $"A new wave of {wave.NEnemies} enemies has spawned!")
+            man.EndBossFight.AddListener(fun () -> ctx "You have defeated the boss!")
+
+            man.HeroStampObtained.AddListener(fun stamp ->
+                let level =
+                    match Globals.Hero.CharacterSaveData.GetHeroStampRank(stamp) with
+                    | ProgressionEnums.HeroStampRank.regular -> "Regular"
+                    | ProgressionEnums.HeroStampRank.ultimate -> "Ultimate"
+                    | _ -> "Unknown"
+
+                let stamp =
+                    match stamp with
+                    | ProgressionEnums.HeroStamp.shogunSlayer -> "Shogun Slayer"
+                    | ProgressionEnums.HeroStamp.totalOblitaration -> "Obliteration"
+                    | ProgressionEnums.HeroStamp.swiftKiller -> "Swift Killer"
+                    | ProgressionEnums.HeroStamp.comboMaster -> "Combo Master"
+                    | ProgressionEnums.HeroStamp.strategist -> "Strategist"
+                    | _ -> "???"
+
+                ctx $"New {stamp} stamp level achieved: {level}")
+
+            man.GameOver.AddListener(fun win ->
+                nobunagaCells <- List.empty
+                trapCells <- List.empty
+                ctx (if win then "Congratulations, you won!" else "You died..."))
+
+            man.ShogunDefeated.AddListener(fun () -> ctx "You have defeated the final boss!")
+            // man.EnemyDied.AddListener(fun _enemy -> ())
+            man.BossDied.AddListener(fun boss -> ctx $"You have defeated the boss {boss.Name}!")
+            // man.EnemyFriendlyKill.AddListener(fun () -> ())
+            // man.ComboKill.AddListener(fun _enemy -> ())
+            // man.PreciseKill.AddListener(fun _enemy -> ())
+            // man.PickupCreated.AddListener(fun _pickup -> ())
+            // man.PickupPickedUp.AddListener(fun _pickup -> ())
+            // man.TileUpgraded.AddListener(fun _tile -> ())
+            // man.NewTilePicked.AddListener(fun _tile -> ())
+            // man.ShopBegin.AddListener(fun () -> ())
+            // man.UnlocksShopBegin.AddListener(fun () -> ())
+            // man.ShopEnd.AddListener(fun () -> ())
+            man.SkillTriggered.AddListener(fun skill ->
+                let name =
+                    Utils.LocalizationUtils.LocalizedString(
+                        "Skills",
+                        $"{Enum.GetName(typeof<SkillEnums.SkillEnum>, skill)}_Name"
+                    )
+
+                ctx $"The skill {name} has been triggered!")
+
             man.SpecialMoveEffectOnTarget.AddListener(fun _hero _target -> ())
             man.PotionUsed.AddListener(fun _potion -> ())
             man.HeroIsHit.AddListener(fun struct (_hit, _attacker) -> ())
@@ -540,14 +855,13 @@ type Game(plugin: MainClass) =
                 if Globals.Hero.AgentStats.ice <= 0 then
                     let move = this.Action Move
 
-                    move.MutateProp "direction" (fun x ->
-                        (x :?> StringSchema).RetainEnum(fun x -> chkMove (Dir.ofStr x)))
+                    move.MutateProp "direction" (fun x -> (x :?> StringSchema).RetainEnum(Dir.ofStr >> chkMove))
 
                     actions <- move :: actions
 
                     if Globals.Hero.AttackQueue.NTiles <> 0 then
                         let queue =
-                            deck ()
+                            Context.deck ()
                             |> Seq.filter (fun (_, v) -> v.TileContainer :? AttackQueueTileContainer)
                             |> Seq.map fst
                             |> Array.ofSeq
@@ -563,7 +877,7 @@ type Game(plugin: MainClass) =
                         let spMove = this.Action SpecialMove
 
                         spMove.MutateProp "direction" (fun x ->
-                            (x :?> StringSchema).RetainEnum(fun x -> chkSpecialMove (Dir.ofStr x)))
+                            (x :?> StringSchema).RetainEnum(Dir.ofStr >> chkSpecialMove))
 
                         actions <- spMove :: actions
 
@@ -578,7 +892,7 @@ type Game(plugin: MainClass) =
 
                     turn.MutateProp "direction" (fun x ->
                         (x :?> StringSchema)
-                            .RetainEnum(fun x -> Dir.ofStr x = Dir.flip (Dir.ofGame Globals.Hero.FacingDir)))
+                            .RetainEnum(Dir.ofStr >> (=) (Dir.flip (Dir.ofGame Globals.Hero.FacingDir))))
 
                     actions <- turn :: actions
 
@@ -588,7 +902,7 @@ type Game(plugin: MainClass) =
                         && CombatSceneManager.Instance.CurrentMode = CombatSceneManager.Mode.combat
                     then
                         let hand =
-                            deck ()
+                            Context.deck ()
                             |> Seq.filter (fun (_, tile) ->
                                 tile.TileIsEnabled && tile.TileContainer :? HandTileContainer)
                             |> Seq.map fst
@@ -600,7 +914,7 @@ type Game(plugin: MainClass) =
 
                         actions <- play :: actions
 
-            if actions |> List.exists (fun x -> x.Dirty) then
+            if actions |> List.exists _.Dirty then
                 ()
 
             this.RetainActions(actions |> List.map (fun x -> x))
@@ -777,7 +1091,7 @@ type Game(plugin: MainClass) =
             combatError false
             |> chk (names.Length > 0) "Must choose at least one tile to attack with"
             |> Result.bind (fun () ->
-                let deck = deck () |> Map.ofSeq
+                let deck = Context.deck () |> Map.ofSeq
 
                 Ok(List.empty, Set.empty)
                 |> List.foldBack
@@ -805,7 +1119,7 @@ type Game(plugin: MainClass) =
                 toRemove |> List.iter (fun (_, x) -> x.TileContainer.UponTileSubmit())
 
                 let q = Globals.Hero.AttackQueue
-                let containers = q.TCC.Containers |> Seq.filter (fun x -> x.HasTile) |> List.ofSeq
+                let containers = q.TCC.Containers |> Seq.filter _.HasTile |> List.ofSeq
 
                 let res =
                     if containers.Length = tiles.Length then
@@ -839,7 +1153,7 @@ type Game(plugin: MainClass) =
                 (CombatSceneManager.Instance.CurrentMode = CombatSceneManager.Mode.combat)
                 "You are not currently in combat"
             |> Result.bind (fun () ->
-                let deck = deck () |> Map.ofSeq
+                let deck = Context.deck () |> Map.ofSeq
 
                 match Map.tryFind name deck with
                 | Some tile -> Ok tile
@@ -887,7 +1201,7 @@ and [<BepInPlugin("org.pavluk.neuroshogun", "NeuroShogun", "1.0.0")>] MainClass(
     let mutable harmony = null
     let mutable initDone = false
     let mutable game = None
-    let cts = new System.Threading.CancellationTokenSource()
+    let cts = new Threading.CancellationTokenSource()
 
     [<DefaultValue>]
     val mutable public Logger: ManualLogSource
