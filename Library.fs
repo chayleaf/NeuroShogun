@@ -183,7 +183,7 @@ type Actions =
     | [<Action("pick_tile_reward", "Pick a tile reward out of the options available")>] PickTileReward of
         tileName: string
     // available: when ShopServiceEnum.get5Coins or get10Coins
-    | [<Action("get_coins", "Buy coins from the shop")>] GetCoins
+    | [<Action("buy_coins", "Buy coins from the shop")>] BuyCoins
     // available: when ShopServiceEnum.heal
     | [<Action("heal", "Fully heal for %d coins")>] Heal
     // available: when ShopServiceEnum.reroll
@@ -206,24 +206,34 @@ type Actions =
     // and Navigate(dir), which does horizontal/vertical nav
     | [<Action("choose_path", "Proceed to the next location")>] ChoosePath of pathIndex: int
 
+type ShopPrice =
+    | Coins of int
+    | Skulls of int
+    | Hp of int
+    | MaxHp of int
+
 type ConsumableContext =
     { slot: int option
       name: string option
       description: string option
-      buyPriceCoins: int option
-      unlockPriceSkulls: int option
-      sellPriceCoins: int option }
+      buyPrice: ShopPrice option
+      unlockPrice: ShopPrice option
+      sellPrice: ShopPrice option }
 
 type ShopUpgradeContext =
     { name: string
       description: string
-      unlockPriceSkulls: int option }
+      unlockPrice: ShopPrice }
+
+// "{current}/{max}"
+type HpContext = string
 
 type SkillContext =
     { name: string
       description: string
-      buyPriceCoins: int option
-      unlockPriceSkulls: int option }
+      level: HpContext
+      buyPrice: ShopPrice option
+      unlockPrice: ShopPrice option }
 
 type EffectContext = { name: string; description: string }
 
@@ -231,36 +241,37 @@ type TileContext =
     { name: string
       // desc
       description: string
+      damage: int
       attackEffect: EffectContext option
       tileEffect: EffectContext option
-      buyPriceCoins: int option
-      unlockPriceSkulls: int option
+      buyPrice: ShopPrice option
+      unlockPrice: ShopPrice option
       cooldown: int option
       inAttackQueue: bool
-      remainingCooldown: int option }
+      remainingCooldown: int option
+      upgradeSlotsUsed: HpContext option }
 
 type TileUpgradeContext =
-    { upgradeCost: int option
-      addedCooldown: int option
+    { addedCooldown: int option
       removedCooldown: int option
       addedDamage: int option
       removedDamage: int option
       addedUpgradeSlots: int option
       removedUpgradeSlots: int option
-      attackEffect: string option
-      tileEffect: string option
-      rerollPrice: int option }
+      usesUpgradeSlots: int
+      attackEffect: EffectContext option
+      tileEffect: EffectContext option }
 
 type ShopContext =
-    { consumables: ConsumableContext list option
+    { name: string
+      consumables: ConsumableContext list option
       upgrades: ShopUpgradeContext list option
       skills: SkillContext list option
       tiles: TileContext list option
-      healPrice: int option
-      rerollPrice: int option }
-
-// "{current}/{max}"
-type HpContext = string
+      fullHealPrice: ShopPrice option
+      rerollPrice: ShopPrice option
+      get5CoinsPrice: ShopPrice option
+      get10CoinsPrice: ShopPrice option }
 
 type SpecialMoveContext =
     { name: string
@@ -339,18 +350,32 @@ type CellContext =
       // corrupted soul
       flyingEnemy: EnemyContext option
       [<SkipSerializingIfEquals false>]
-      youAreHere: bool }
+      youAreHere: bool
+      [<SkipSerializingIfEquals false>]
+      goHereToOpenShop: bool
+      [<SkipSerializingIfEquals false>]
+      goHereToStartNewGame: bool }
 
 type MapContext =
     { currentLocation: LocationContext
       paths: LocationContext list }
 
+type RewardContext =
+    { name: string option
+      description: string option
+      pickTileOptions: TileContext list option
+      tileUpgrade: TileUpgradeContext option
+      tileSacrificeReward: ShopPrice option
+      warriorsGamble: bool
+      rerollPrice: ShopPrice option
+      price: ShopPrice option }
+
 type Context =
     { player: PlayerContext
       shop: ShopContext option
-      pickTileOptions: TileContext list option
-      tileUpgrade: TileUpgradeContext option
-      tileSacrificeRewardCoins: int option
+      shop1: RewardContext option
+      shop2: ShopContext option
+      reward: RewardContext option
       gridCells: CellContext list option }
 
 module Context =
@@ -360,26 +385,30 @@ module Context =
         { name = Some(stripTags potion.Name)
           description = Some(stripTags potion.Description)
           slot = slot
-          buyPriceCoins = None
-          unlockPriceSkulls = None
-          sellPriceCoins =
+          buyPrice = None
+          unlockPrice = None
+          sellPrice =
             if Option.isSome slot && potion.CanBeSold then
                 Some(
                     potion.BasePriceForHeroSelling
                     + if PotionsManager.Instance.RogueRetail then 1 else 0
+                    |> Coins
                 )
             else
                 None }
 
-    let deck () : (string * Tile) seq =
+    let deckMap () : (string * Tile) seq * Map<string, int> =
         TilesManager.Instance.Deck
-        |> Seq.map (fun tile -> (stripTags tile.Attack.Name, tile))
-        |> (Map.empty
-            |> Seq.mapFold (fun state (name, tile) ->
-                match state.TryFind name with
+        |> Seq.mapFold
+            (fun state tile ->
+                let name = stripTags tile.Attack.Name
+
+                match Map.tryFind name state with
                 | Some count -> (($"{name} ({count + 1})", tile), Map.add name (count + 1) state)
-                | None -> ((name, tile), Map.add name 1 state)))
-        |> fst
+                | None -> ((name, tile), Map.add name 1 state))
+            Map.empty
+
+    let deck () : (string * Tile) seq = fst (deckMap ())
 
     let attackEffect (eff: TileEnums.AttackEffectEnum) : EffectContext option =
         if eff = TileEnums.AttackEffectEnum.None then
@@ -397,22 +426,29 @@ module Context =
                 { name = stripTags (TileEnums.TileEnumsUtils.LocalizedTileEffectName(eff))
                   description = stripTags (TileEnums.TileEnumsUtils.LocalizedTileEffectDescription(eff)) }
 
-    let tile (name: string option) (tile: Tile) : TileContext =
+    let tile (player: bool) (name: string option) (tile: Tile) : TileContext =
         { name = stripTags (Option.defaultValue tile.Attack.Name name)
+          damage = tile.Attack.Value
           description = stripTags tile.Attack.Description
           attackEffect = attackEffect tile.Attack.AttackEffect
           tileEffect = tileEffect tile.Attack.TileEffect
-          buyPriceCoins = None
-          unlockPriceSkulls = None
+          buyPrice = None
+          unlockPrice = None
           cooldown = Some tile.Attack.Cooldown
           remainingCooldown = Some tile.TurnsBeforeCharged
-          inAttackQueue = tile.TileContainer :? AttackQueueTileContainer }
+          inAttackQueue = tile.TileContainer :? AttackQueueTileContainer
+          upgradeSlotsUsed =
+            if player then
+                Some $"{tile.Attack.Level}/{tile.Attack.MaxLevel}"
+            else
+                None }
 
     let skill (skill: Skill) : SkillContext =
         { name = skill.Name
           description = skill.Description
-          buyPriceCoins = None
-          unlockPriceSkulls = None }
+          level = $"{skill.Level}/{skill.MaxLevel}"
+          buyPrice = None
+          unlockPrice = None }
 
     let hp (s: AgentStats) : HpContext = $"{s.HP}/{s.maxHP}"
 
@@ -458,7 +494,7 @@ module Context =
             | CombatEnums.ActionEnum.FlipRight -> Intention.TurnRight
             | _ -> Intention.Wait
           boss = enemy :? Boss
-          attackQueue = enemy.AttackQueue.TCC.Tiles |> Seq.map (tile None) |> List.ofSeq
+          attackQueue = enemy.AttackQueue.TCC.Tiles |> Seq.map (tile false None) |> List.ofSeq
           iceResistance = not enemy.Freezable
           pushResistance = not enemy.Movable
           hp = hp enemy.AgentStats
@@ -495,7 +531,9 @@ module Context =
           traps = traps |> List.filter (fst >> (=) cell) |> List.fold (fun n _ -> n + 1) 0
           // corrupted soul
           flyingEnemy = flying
-          youAreHere = you }
+          youAreHere = you
+          goHereToOpenShop = false
+          goHereToStartNewGame = false }
 
     let player () : PlayerContext =
         let hero = Globals.Hero
@@ -507,7 +545,7 @@ module Context =
           coins = Globals.Coins
           skullMetaCurrency = Globals.KillCount
           consumables = pm.HeldPotions |> Array.mapi (fun i x -> consumable (Some i) x) |> List.ofArray
-          tiles = deck |> Seq.map (fun (s, x) -> tile (Some s) x) |> List.ofSeq
+          tiles = deck |> Seq.map (fun (s, x) -> tile true (Some s) x) |> List.ofSeq
           specialMove = specialMove hero
           attackQueue =
             deck
@@ -555,6 +593,297 @@ module Context =
             |> Seq.filter _.Uncovered
             |> Seq.map location
             |> List.ofSeq }
+
+    let price (price: Price) : ShopPrice =
+        match price.Currency with
+        | ShopStuff.CurrencyEnum.coins -> Coins price.Value
+        | ShopStuff.CurrencyEnum.meta -> Skulls price.Value
+        | ShopStuff.CurrencyEnum.hp -> Hp price.Value
+        | ShopStuff.CurrencyEnum.maxHP -> MaxHp price.Value
+        | _ -> Coins price.Value
+
+    let shop (shop: Shop) : ShopContext =
+        let name =
+            typeof<Shop>
+                .GetProperty("Name", BindingFlags.NonPublic ||| BindingFlags.Instance)
+                .GetValue(shop)
+            :?> string
+
+        let uis =
+            typeof<Shop>
+                .GetField("shopItemUIs", BindingFlags.NonPublic ||| BindingFlags.Instance)
+                .GetValue(shop)
+            :?> Generic.List<ShopItemUI>
+            |> List.ofSeq
+
+        uis
+        // public property that returns Interactable && !Interactable which is just what i need
+        |> List.filter _.InfoBoxEnabled
+        |> List.fold
+            (fun (ret: ShopContext) ui ->
+                match ui.shopItemData with
+                | :? ConsumableShopItem as item ->
+                    let item =
+                        { consumable None item.potionPickupPrefab.PotionPrefab with
+                            buyPrice = Some(price ui.price) }
+
+                    { ret with
+                        consumables = Some(item :: Option.defaultValue List.empty ret.consumables) }
+                | :? ServiceShopItem as item ->
+                    match item.shopServiceEnum with
+                    | ShopStuff.ShopServiceEnum.reroll ->
+                        { ret with
+                            rerollPrice = Some(price ui.price) }
+                    | ShopStuff.ShopServiceEnum.heal ->
+                        { ret with
+                            rerollPrice = Some(price ui.price) }
+                    | ShopStuff.ShopServiceEnum.get5Coins ->
+                        { ret with
+                            get5CoinsPrice = Some(price ui.price) }
+                    | ShopStuff.ShopServiceEnum.get10Coins ->
+                        { ret with
+                            get10CoinsPrice = Some(price ui.price) }
+                    // unknown service
+                    | _ -> ret
+                | :? ShopUpgradeShopItem as item ->
+                    let key =
+                        typeof<ShopUpgradeShopItem>
+                            .GetField("SlotTypeLocalizationTableKey", BindingFlags.NonPublic ||| BindingFlags.Instance)
+                            .GetValue(item)
+                        :?> string
+
+                    let item =
+                        { name = Utils.LocalizationUtils.LocalizedString("Terms", key)
+                          description = item.Description
+                          unlockPrice = price ui.price }
+
+                    { ret with
+                        upgrades = Some(item :: Option.defaultValue List.empty ret.upgrades) }
+                | :? SkillShopItemData as item ->
+                    let item =
+                        typeof<SkillShopItemData>
+                            .GetField("skill", BindingFlags.NonPublic ||| BindingFlags.Instance)
+                            .GetValue(item)
+                        :?> Skill
+
+                    let item =
+                        { skill item with
+                            buyPrice = Some(price ui.price) }
+
+                    { ret with
+                        skills = Some(item :: Option.defaultValue List.empty ret.skills) }
+                | :? UnlockConsumableShopItem as item ->
+                    let item =
+                        { consumable None item.potionPickupPrefab.PotionPrefab with
+                            unlockPrice = Some(price ui.price) }
+
+                    { ret with
+                        consumables = Some(item :: Option.defaultValue List.empty ret.consumables) }
+                | :? UnlockSkillShopItem as item ->
+                    let item =
+                        typeof<UnlockSkillShopItem>
+                            .GetField("item", BindingFlags.NonPublic ||| BindingFlags.Instance)
+                            .GetValue(item)
+                        :?> Skill
+
+                    let item =
+                        { skill item with
+                            unlockPrice = Some(price ui.price) }
+
+                    { ret with
+                        skills = Some(item :: Option.defaultValue List.empty ret.skills) }
+                | :? UnlockTileShopItem as item ->
+                    let item =
+                        typeof<UnlockTileShopItem>
+                            .GetField("tile", BindingFlags.NonPublic ||| BindingFlags.Instance)
+                            .GetValue(item)
+                        :?> Tile
+
+                    let item =
+                        { tile false None item with
+                            unlockPrice = Some(price ui.price) }
+
+                    { ret with
+                        tiles = Some(item :: Option.defaultValue List.empty ret.tiles) }
+                // unknown unlock
+                | :? UnlockShopItemData -> ret
+                // unknown item
+                | _ -> ret)
+            { upgrades = None
+              name = name
+              consumables = None
+              skills = None
+              tiles = None
+              fullHealPrice = None
+              rerollPrice = None
+              get5CoinsPrice = None
+              get10CoinsPrice = None }
+        |> (fun (x: ShopContext) ->
+            { x with
+                consumables = Option.map List.rev x.consumables
+                upgrades = Option.map List.rev x.upgrades
+                skills = Option.map List.rev x.skills
+                tiles = Option.map List.rev x.tiles })
+
+    let reward (reward: Reward) : RewardContext option =
+        if reward.Exausted then
+            None
+        else
+            let room = CombatSceneManager.Instance.Room
+
+            let rerollPrice, price =
+                match room with
+                | :? ShopRoom as room ->
+                    let upgrade =
+                        typeof<ShopRoom>
+                            .GetField("tileUpgradeInShop", BindingFlags.NonPublic ||| BindingFlags.Instance)
+                            .GetValue(room)
+                        :?> TileUpgradeInShop
+
+                    None, Some(price upgrade.price)
+                | :? RewardRoom as room -> Some(Coins room.rewardRerolling.RerollPrice), None
+                | _ -> None, None
+
+            let name, description, pickTileOptions, tileUpgrade, tileSacrificeReward, warriorsGamble =
+                let a n = if n > 0 then Some n else None
+                let r n = if n < 0 then Some(-n) else None
+
+                match reward with
+                | :? NewTileReward as reward ->
+                    let _, map = deckMap ()
+
+                    let pickTileOptions =
+                        reward.NewTilePedestals
+                        |> Array.map _.Tile
+                        |> Array.mapFold
+                            (fun state tile ->
+                                let name = stripTags tile.Attack.Name
+
+                                match Map.tryFind name state with
+                                | Some count -> (($"{name} ({count + 1})", tile), Map.add name (count + 1) state)
+                                | None -> ((name, tile), Map.add name 1 state))
+                            map
+                        |> fst
+                        |> Array.map (fun (s, x) -> tile true (Some s) x)
+                        |> List.ofArray
+
+                    None, None, Some pickTileOptions, None, None, false
+                | :? TileUpgradeReward as reward ->
+                    match reward.TileUpgrade with
+                    | :? AddAttackEffectTileUpgrade as reward ->
+                        let upg =
+                            { addedCooldown = a reward.cooldownDelta
+                              removedCooldown = r reward.cooldownDelta
+                              removedDamage = None
+                              addedDamage = None
+                              removedUpgradeSlots = None
+                              addedUpgradeSlots = None
+                              usesUpgradeSlots = 1
+                              attackEffect = attackEffect reward.effect
+                              tileEffect = None }
+
+                        None, None, None, Some upg, None, false
+                    // description is redundant
+                    | :? AddTileEffectTileUpgrade as reward ->
+                        let upg =
+                            { addedCooldown = a reward.cooldownDelta
+                              removedCooldown = r reward.cooldownDelta
+                              removedDamage = None
+                              addedDamage = None
+                              removedUpgradeSlots = None
+                              addedUpgradeSlots = None
+                              usesUpgradeSlots = 1
+                              attackEffect = None
+                              tileEffect = tileEffect reward.effect }
+
+                        None, None, None, Some upg, None, false
+                    // for stats, description is redundant, dont show it
+                    | :? StatsTileUpgrade as reward ->
+                        let f s =
+                            typeof<StatsTileUpgrade>
+                                .GetField(s, BindingFlags.NonPublic ||| BindingFlags.Instance)
+                                .GetValue(reward)
+                            :?> int
+
+                        let cooldownDelta, maxLevelDelta, levelDelta, attackDelta =
+                            f "cooldownDelta", f "maxLevelDelta", f "levelDelta", f "attackDelta"
+
+                        let upg =
+                            { addedCooldown = a cooldownDelta
+                              removedCooldown = r cooldownDelta
+                              removedDamage = r attackDelta
+                              addedDamage = a attackDelta
+                              removedUpgradeSlots = r maxLevelDelta
+                              addedUpgradeSlots = a maxLevelDelta
+                              usesUpgradeSlots = levelDelta
+                              attackEffect = None
+                              tileEffect = None }
+
+                        None, None, None, Some upg, None, false
+                    // for sacrifice, description is redundant i guess
+                    | :? SacrificeTileUpgrade as reward ->
+                        let coins =
+                            typeof<SacrificeTileUpgrade>
+                                .GetField("nCoins", BindingFlags.NonPublic ||| BindingFlags.Instance)
+                                .GetValue(reward)
+                            :?> int
+
+                        None, None, None, None, Some(Coins coins), false
+                    // for warriors gamble, description/details makes sense to show
+                    | :? WarriorGambleUpgrade as reward ->
+                        Some(stripTags reward.Description), Some(stripTags reward.Details), None, None, None, true
+                    | reward ->
+                        Some(stripTags reward.Description), Some(stripTags reward.Details), None, None, None, false
+                | _ -> None, None, None, None, None, false
+
+            Some
+                { name = name
+                  description = description
+                  pickTileOptions = pickTileOptions
+                  tileUpgrade = tileUpgrade
+                  tileSacrificeReward = tileSacrificeReward
+                  warriorsGamble = warriorsGamble
+                  price = price
+                  rerollPrice = rerollPrice }
+
+
+    let context (nobunaga: Cell list) (traps: (Cell * Trap) list) : Context =
+        let room = CombatSceneManager.Instance.Room
+
+        let mutable cells =
+            room.Grid.Cells |> Array.map (cell nobunaga traps) |> List.ofArray
+
+        let shop, shop1, shop2, reward =
+            match room with
+            | :? CampRoom as room ->
+                cells <-
+                    cells
+                    |> List.mapi (fun i x ->
+                        if i = 0 then
+                            { x with goHereToOpenShop = true }
+                        elif i = cells.Length - 1 then
+                            { x with goHereToStartNewGame = true }
+                        else
+                            x)
+
+                let shop = shop room.UnlocksShop
+                Some shop, None, None, None
+            | :? RewardRoom as room ->
+                let reward = reward room.Reward
+
+                None, None, None, reward
+            | :? ShopRoom as room ->
+                let reward = reward room.TileUpgradeReward
+                let shop = shop room.Shop
+                None, reward, Some shop, None
+            | _ -> None, None, None, None
+
+        { player = player ()
+          shop = shop
+          shop1 = shop1
+          shop2 = shop2
+          reward = reward
+          gridCells = cells |> Some }
 
 type Game(plugin: MainClass) =
     inherit Game<Actions>()
@@ -606,6 +935,7 @@ type Game(plugin: MainClass) =
     let mutable nobunagaCells = List.empty
     let mutable trapCells = List.empty
     let mutable trapCell = null
+    let mutable skipDioramaTime = None
 
     member _.InhibitForces
         with set value =
@@ -613,6 +943,9 @@ type Game(plugin: MainClass) =
                 inhibitForces <- inhibitForces + 1
             else
                 inhibitForces <- inhibitForces - 1
+
+    member _.ScheduleDioramaSkip() =
+        skipDioramaTime <- Some(DateTime.UtcNow.AddSeconds(1))
 
     member _.TrapGone(trap: Trap) =
         trapCells <- trapCells |> List.filter (snd >> (<>) trap)
@@ -812,8 +1145,20 @@ type Game(plugin: MainClass) =
             man.RoomEnd.AddListener(fun _room -> ())
             man.MapOpened.AddListener(fun () -> ())
             man.MapCurrentLocationCleared.AddListener(fun () -> ())
+            man.RewardBusy.AddListener(fun () -> inhibitForces <- inhibitForces + 1)
+            man.RewardReady.AddListener(fun () -> inhibitForces <- inhibitForces - 1)
 
         this.ReregisterActions()
+
+        if skipDioramaTime |> Option.exists (fun x -> DateTime.UtcNow < x) then
+            let chars =
+                typeof<DioramaManager>
+                    .GetField("dioramaCharacters", BindingFlags.NonPublic ||| BindingFlags.Instance)
+                    .GetValue(DioramaManager.Instance)
+                :?> DioramaCharacters
+
+            chars.SkipPressed()
+            skipDioramaTime <- None
 
     override this.ReregisterActions() =
         if
@@ -1187,7 +1532,7 @@ type Game(plugin: MainClass) =
         // services
         | RerollRewards -> Error(None)
         | Heal -> Error(None)
-        | GetCoins -> Error(None)
+        | BuyCoins -> Error(None)
         // skip
         | SkipRewards -> Error(None)
         | SelectHero(_heroName, _altDeck, _day) -> Error(None)

@@ -27,6 +27,16 @@ type public Patches() =
         MainClass.Instance.Game.InhibitForces <- true
         __result <- EnumeratorWrapper(__result, ignore, (fun () -> MainClass.Instance.Game.InhibitForces <- false))
 
+    [<HarmonyPatch(typeof<Shop>, "ItemBoughtSequenceBegin")>]
+    [<HarmonyPostfix>]
+    static member ShopLock() =
+        MainClass.Instance.Game.InhibitForces <- true
+
+    [<HarmonyPatch(typeof<Shop>, "ItemBoughtSequenceOver")>]
+    [<HarmonyPostfix>]
+    static member ShopUnlock() =
+        MainClass.Instance.Game.InhibitForces <- false
+
     [<HarmonyPatch(typeof<DioramaManager>, "Start")>]
     [<HarmonyPrefix>]
     static member DioramaStart() = MainClass.Instance.Game.DioramaStart()
@@ -91,3 +101,9 @@ type public Patches() =
     [<HarmonyPostfix>]
     static member TrapWentOff(__instance: Trap, __alreadyTriggered: bool) =
         MainClass.Instance.Game.TrapGone __instance
+
+    [<HarmonyPatch(typeof<DioramaManager>, nameof Unchecked.defaultof<DioramaManager>.SetPressAnyKeyVisible)>]
+    [<HarmonyPostfix>]
+    static member DioramaAnyKeyVis(value: bool) =
+        if value then
+            MainClass.Instance.Game.ScheduleDioramaSkip()
