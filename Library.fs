@@ -324,7 +324,7 @@ type PlayerContext =
       remainingFrozenDuration: int
       [<SkipSerializingIfEquals false>]
       shield: bool
-      [<SkipSerializingIfEquals false>]
+      [<SkipSerializingIfEquals 0>]
       remainingPoisonedDuration: int
       [<SkipSerializingIfEquals false>]
       cursed: bool }
@@ -364,7 +364,7 @@ type EnemyContext =
       remainingFrozenDuration: int
       [<SkipSerializingIfEquals false>]
       shield: bool
-      [<SkipSerializingIfEquals false>]
+      [<SkipSerializingIfEquals 0>]
       remainingPoisonedDuration: int
       [<SkipSerializingIfEquals false>]
       cursed: bool
@@ -387,8 +387,8 @@ type CellContext =
       // corrupted soul
       [<SkipSerializingIfNone>]
       flyingEnemy: EnemyContext option
-      [<SkipSerializingIfEquals false>]
-      youAreHere: bool
+      [<SkipSerializingIfNone>]
+      youAreHereAndFacing: Direction option
       [<SkipSerializingIfEquals false>]
       goHereToOpenShop: bool
       [<SkipSerializingIfEquals false>]
@@ -596,9 +596,9 @@ module Context =
 
         let enemy, you =
             match cell.Agent with
-            | null -> None, false
-            | :? Hero -> None, true
-            | x -> Some(enemy (x :?> Enemy)), false
+            | null -> None, None
+            | :? Hero as hero -> None, Some(Dir.ofGame hero.FacingDir)
+            | x -> Some(enemy (x :?> Enemy)), None
 
         { xPos = cell.IndexInGrid
           spotlight =
@@ -610,7 +610,7 @@ module Context =
           traps = traps |> List.filter (fst >> (=) cell) |> List.fold (fun n _ -> n + 1) 0
           // corrupted soul
           flyingEnemy = flying
-          youAreHere = you
+          youAreHereAndFacing = you
           goHereToOpenShop = false
           goHereToStartNewGame = false }
 
@@ -969,15 +969,13 @@ module Context =
                             { heroes = heroes
                               dayBuffs =
                                 [ 2..maxDay ]
-                                |> List.map (Ascension.DescriptionOfBuffActivatedOnDay >> stripTags) }
+                                |> List.map (fun i ->
+                                    $"Day {i} - {stripTags (Ascension.DescriptionOfBuffActivatedOnDay i)}") }
                     else
                         None
 
                 let shop =
-                    if cells.[0].youAreHere then
-                        Some(shop room.UnlocksShop)
-                    else
-                        None
+                    cells.[0].youAreHereAndFacing |> Option.map (fun _ -> shop room.UnlocksShop)
 
                 shop, None, None, None, ngc
             | :? RewardRoom as room ->
@@ -1086,7 +1084,6 @@ type Game(plugin: MainClass) =
         if inhibitForces = 0 then
             let ctx = Context.context nobunagaCells trapCells
 
-            forceNames <- None
             isForce <- true
 
             this.Force(
@@ -1295,12 +1292,11 @@ type Game(plugin: MainClass) =
             man.RewardBusy.AddListener(fun () -> inhibitForces <- inhibitForces + 1)
             man.RewardReady.AddListener(fun () -> inhibitForces <- inhibitForces - 1)
 
-        if not isForce then
-            this.ReregisterActions()
+        this.ReregisterActions()
 
         match forceNames with
-        | Some names -> this.PerformForce names
-        | None -> ()
+        | Some names when not isForce -> this.PerformForce names
+        | _ -> ()
 
         if skipDioramaTime |> Option.exists (fun x -> DateTime.UtcNow < x) then
             let chars =
@@ -1313,8 +1309,6 @@ type Game(plugin: MainClass) =
             skipDioramaTime <- None
 
     override this.ReregisterActions() =
-        this.LogError $"was force {isForce}"
-        isForce <- false
         let mutable shouldForce = false
 
         if
@@ -1356,12 +1350,13 @@ type Game(plugin: MainClass) =
                 && not CombatManager.Instance.TurnInProgress
                 && CombatManager.Instance.AllowHeroAction
             then
-                shouldForce <- true
 
                 if Globals.Hero.AllowWait then
                     actions <- this.Action Wait :: actions
+                    shouldForce <- true
 
                 if Globals.Hero.AgentStats.ice <= 0 then
+                    shouldForce <- true
                     let move = this.Action Move
 
                     move.MutateProp "direction" (fun x -> (x :?> StringSchema).RetainEnum(Dir.ofStr >> chkMove))
@@ -1428,7 +1423,21 @@ type Game(plugin: MainClass) =
             this.RetainActions(actions |> List.map (fun x -> x))
 
             if shouldForce then
-                forceNames <- Some(actions |> List.map _.Name)
+                let newForce = actions |> List.map _.Name
+
+                if not isForce then
+                    this.LogDebug($"!isforce {newForce}")
+
+                if
+                    not isForce
+                    || isForce
+                       && not (
+                           forceNames
+                           |> Option.forall (fun x -> x.Length = newForce.Length && List.forall2 (=) x newForce)
+                       )
+                then
+                    isForce <- false
+                    forceNames <- Some newForce
 
     override _.Name = "test"
 
@@ -1706,11 +1715,17 @@ type Game(plugin: MainClass) =
         |> (fun x ->
             if Result.isOk x then
                 isForce <- false
+                forceNames <- None
 
             x)
 
-    override _.LogError error = plugin.Logger.LogError $"{error}"
-    override _.LogDebug error = plugin.Logger.LogInfo $"{error}"
+    override _.LogError error =
+        let fff = "fff"
+        plugin.Logger.LogError $"{DateTime.UtcNow}.{DateTime.UtcNow.ToString(fff)} {error}"
+
+    override _.LogDebug error =
+        let fff = "fff"
+        plugin.Logger.LogInfo $"{DateTime.UtcNow}.{DateTime.UtcNow.ToString(fff)} {error}"
 
 and [<BepInPlugin("org.pavluk.neuroshogun", "NeuroShogun", "1.0.0")>] MainClass() =
     inherit BaseUnityPlugin()
@@ -1762,6 +1777,6 @@ and [<BepInPlugin("org.pavluk.neuroshogun", "NeuroShogun", "1.0.0")>] MainClass(
             Globals.DeveloperUtils._invulnerable <- true
             // Globals.DeveloperUtils._customLocation <- true
             Globals.DeveloperUtils._quick <- true
-            Globals.DeveloperUtils._shortLocations <- true
+        // Globals.DeveloperUtils._shortLocations <- true
         else
             ()

@@ -58,7 +58,10 @@ type SkipSerializingIfNone() =
     inherit FieldAttr()
 
     override _.Serialized name value serialized =
-        if value = null || FSharpValue.GetUnionFields(value, value.GetType()) |> snd |> Array.length = 0 then
+        if
+            value = null
+            || FSharpValue.GetUnionFields(value, value.GetType()) |> snd |> Array.length = 0
+        then
             []
         else
             [ (name, serialized.Value) ]
@@ -643,11 +646,14 @@ module internal TypeInfo =
 
             match tagName with
             | Some(tagName) ->
-                ret
-                |> Seq.append (Seq.singleton (tagName, JsonValue.String info.caseName))
-                |> Array.ofSeq
-            | None -> [| (info.caseName, ret |> Array.ofSeq |> JsonValue.Record) |]
-            |> JsonValue.Record
+                if Seq.isEmpty ret then
+                    JsonValue.String tagName
+                else
+                    ret
+                    |> Seq.append (Seq.singleton (tagName, JsonValue.String info.caseName))
+                    |> Array.ofSeq
+                    |> JsonValue.Record
+            | None -> JsonValue.Record [| (info.caseName, ret |> Array.ofSeq |> JsonValue.Record) |]
         | Option info ->
             let _, fields = FSharpValue.GetUnionFields(obj, ty)
 
