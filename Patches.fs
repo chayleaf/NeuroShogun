@@ -57,11 +57,12 @@ type public Patches() =
                 __result,
                 (fun i ->
                     match i with
-                    | 0 ->
+                    | 0 -> ()
+                    | 1 ->
                         MainClass.Instance.Game.ShowCatDialogue(
                             Utils.LocalizationUtils.LocalizedString("ShopAndNPC", "Cat_Mao")
                         )
-                    | 1 ->
+                    | 2 ->
                         MainClass.Instance.Game.ShowCatDialogue(
                             Utils.LocalizationUtils.LocalizedString("ShopAndNPC", "Cat_Purr")
                         )
@@ -69,12 +70,10 @@ type public Patches() =
                 id
             )
 
-        MainClass.Instance.Game.CreditsStart()
-
     [<HarmonyPatch(typeof<NobunagaBoss>, "AddVulnerableCells")>]
     [<HarmonyPostfix>]
-    static member NobunagaAttacked(__vulnerableCells: Generic.List<Cell>) =
-        MainClass.Instance.Game.NobunagaCells(__vulnerableCells |> List.ofSeq)
+    static member NobunagaAttacked(___vulnerableCells: Generic.List<Cell>) =
+        MainClass.Instance.Game.NobunagaCells(___vulnerableCells |> List.ofSeq)
 
     [<HarmonyPatch(typeof<NobunagaBoss>, nameof Unchecked.defaultof<NobunagaBoss>.ReceiveAttack)>]
     [<HarmonyPrefix>]
@@ -83,7 +82,7 @@ type public Patches() =
 
     [<HarmonyPatch(typeof<Agent>, nameof Unchecked.defaultof<Agent>.ReceiveAttack)>]
     [<HarmonyPrefix>]
-    static member AgentAttacked(hit: Hit, attacker: Agent, __instance: Agent, __vulnerableCells: Generic.List<Cell>) =
+    static member AgentAttacked(hit: Hit, attacker: Agent, __instance: Agent) =
         if not (__instance :? NobunagaBoss) then
             MainClass.Instance.Game.ReceiveAttack(__instance, hit, attacker)
 
@@ -94,13 +93,14 @@ type public Patches() =
 
     [<HarmonyPatch(typeof<TrapAttack>, nameof Unchecked.defaultof<TrapAttack>.Begin)>]
     [<HarmonyPrefix>]
-    static member TrapAttack(agent: Agent) =
-        MainClass.Instance.Game.TrapAttack agent
+    static member TrapAttack(attacker: Agent) =
+        MainClass.Instance.Game.TrapAttack attacker
 
-    [<HarmonyPatch(typeof<TrapAttack>, nameof Unchecked.defaultof<TrapAttack>.Begin)>]
+    [<HarmonyPatch(typeof<Trap>, "OnTriggerEnter2D")>]
     [<HarmonyPostfix>]
-    static member TrapWentOff(__instance: Trap, __alreadyTriggered: bool) =
-        MainClass.Instance.Game.TrapGone __instance
+    static member TrapWentOff(__instance: Trap, ___alreadyTriggered: bool) =
+        if ___alreadyTriggered then
+            MainClass.Instance.Game.TrapGone __instance
 
     [<HarmonyPatch(typeof<DioramaManager>, nameof Unchecked.defaultof<DioramaManager>.SetPressAnyKeyVisible)>]
     [<HarmonyPostfix>]

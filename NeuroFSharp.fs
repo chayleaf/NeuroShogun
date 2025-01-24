@@ -54,6 +54,15 @@ type SkipSerializingIfEquals(x: obj) =
     override _.Serialized name value serialized =
         if x = value then [] else [ (name, serialized.Value) ]
 
+type SkipSerializingIfNone() =
+    inherit FieldAttr()
+
+    override _.Serialized name value serialized =
+        if value = null || FSharpValue.GetUnionFields(value, value.GetType()) |> snd |> Array.length = 0 then
+            []
+        else
+            [ (name, serialized.Value) ]
+
 type RenameField(name: string) =
     inherit FieldAttr()
 
@@ -519,7 +528,7 @@ module internal TypeInfo =
 
     and fromSystemType (ty: Type) : TypeInfo =
         let objArr (arr: Array) : obj array =
-            [| 1 .. arr.Length |] |> Array.map ((-) 1 >> arr.GetValue)
+            [| 1 .. arr.Length |] |> Array.map (fun i -> arr.GetValue(i - 1))
 
         (ty,
          match ty with
@@ -939,6 +948,10 @@ type Game<'T>() =
 
     member this.Force(data: ActionsForce) =
         this.Send(Actions_Force(this.Name, data))
+
+    member _.Serialize<'Y>(what: 'Y) : string =
+        let ty = TypeInfo.fromSystemType typeof<'Y>
+        (TypeInfo.serialize ty what).ToString(JsonSaveOptions.DisableFormatting)
 
     member _.Action(action: obj) = resolveAction action
 

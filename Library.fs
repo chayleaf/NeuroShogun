@@ -13,12 +13,6 @@ type Direction =
     | Left
     | Right
 
-(*
-wrap cutscenes:
-ShopkeeperGiveFreeConsumableCoroutine
-ItemBoughtSequenceBegin -> ItemBoughtSequenceOver
-*)
-
 type EnumeratorWrapper(obj: IEnumerator, onNext: int -> unit, onDone: unit -> unit) =
     let mutable count = 0
 
@@ -207,17 +201,29 @@ type Actions =
     | [<Action("choose_path", "Proceed to the next location")>] ChoosePath of pathIndex: int
 
 type ShopPrice =
-    | Coins of int
-    | Skulls of int
-    | Hp of int
-    | MaxHp of int
+    { [<SkipSerializingIfEquals(0)>]
+      coins: int
+      [<SkipSerializingIfEquals(0)>]
+      skulls: int
+      [<SkipSerializingIfEquals(0)>]
+      hp: int
+      [<SkipSerializingIfEquals(0)>]
+      maxHp: int
+      [<SkipSerializingIfEquals(false)>]
+      free: bool }
 
 type ConsumableContext =
-    { slot: int option
+    { [<SkipSerializingIfNone>]
+      slot: int option
+      [<SkipSerializingIfNone>]
       name: string option
+      [<SkipSerializingIfNone>]
       description: string option
+      [<SkipSerializingIfNone>]
       buyPrice: ShopPrice option
+      [<SkipSerializingIfNone>]
       unlockPrice: ShopPrice option
+      [<SkipSerializingIfNone>]
       sellPrice: ShopPrice option }
 
 type ShopUpgradeContext =
@@ -232,7 +238,9 @@ type SkillContext =
     { name: string
       description: string
       level: HpContext
+      [<SkipSerializingIfNone>]
       buyPrice: ShopPrice option
+      [<SkipSerializingIfNone>]
       unlockPrice: ShopPrice option }
 
 type EffectContext = { name: string; description: string }
@@ -242,48 +250,70 @@ type TileContext =
       // desc
       description: string
       damage: int
+      [<SkipSerializingIfNone>]
       attackEffect: EffectContext option
+      [<SkipSerializingIfNone>]
       tileEffect: EffectContext option
+      [<SkipSerializingIfNone>]
       buyPrice: ShopPrice option
+      [<SkipSerializingIfNone>]
       unlockPrice: ShopPrice option
-      cooldown: int option
-      inAttackQueue: bool
-      remainingCooldown: int option
+      [<SkipSerializingIfNone>]
+      cooldownCharge: HpContext option
+      [<SkipSerializingIfNone>]
+      inAttackQueue: bool option
+      [<SkipSerializingIfNone>]
       upgradeSlotsUsed: HpContext option }
 
 type TileUpgradeContext =
-    { addedCooldown: int option
+    { [<SkipSerializingIfNone>]
+      addedCooldown: int option
+      [<SkipSerializingIfNone>]
       removedCooldown: int option
+      [<SkipSerializingIfNone>]
       addedDamage: int option
+      [<SkipSerializingIfNone>]
       removedDamage: int option
+      [<SkipSerializingIfNone>]
       addedUpgradeSlots: int option
+      [<SkipSerializingIfNone>]
       removedUpgradeSlots: int option
       usesUpgradeSlots: int
+      [<SkipSerializingIfNone>]
       attackEffect: EffectContext option
+      [<SkipSerializingIfNone>]
       tileEffect: EffectContext option }
 
 type ShopContext =
     { name: string
+      [<SkipSerializingIfNone>]
       consumables: ConsumableContext list option
+      [<SkipSerializingIfNone>]
       upgrades: ShopUpgradeContext list option
+      [<SkipSerializingIfNone>]
       skills: SkillContext list option
+      [<SkipSerializingIfNone>]
       tiles: TileContext list option
+      [<SkipSerializingIfNone>]
       fullHealPrice: ShopPrice option
+      [<SkipSerializingIfNone>]
       rerollPrice: ShopPrice option
+      [<SkipSerializingIfNone>]
       get5CoinsPrice: ShopPrice option
+      [<SkipSerializingIfNone>]
       get10CoinsPrice: ShopPrice option }
 
 type SpecialMoveContext =
     { name: string
       // desc
       description: string
-      cooldown: int
-      remainingCooldown: int }
+      cooldownCharge: HpContext }
 
 type PlayerContext =
     { name: string
       coins: int
       skullMetaCurrency: int
+      facingDirection: Direction
       consumables: ConsumableContext list
       skills: SkillContext list
       tiles: TileContext list
@@ -302,7 +332,9 @@ type PlayerContext =
 type LocationContext =
     { island: string
       name: string
+      [<SkipSerializingIfNone>]
       shop1: string option
+      [<SkipSerializingIfNone>]
       shop2: string option }
 
 [<RequireQualifiedAccess>]
@@ -320,7 +352,10 @@ type Intention =
 type EnemyContext =
     { name: string
       description: string
+      facingDirection: Direction
+      [<SkipSerializingIfNone>]
       traits: string list option
+      [<SkipSerializingIfNone>]
       elite: string option
       attackQueue: TileContext list
       intention: Intention
@@ -343,11 +378,14 @@ type EnemyContext =
 type CellContext =
     { xPos: int
       // nobunaga
+      [<SkipSerializingIfNone>]
       spotlight: bool option
+      [<SkipSerializingIfNone>]
       enemy: EnemyContext option
       [<SkipSerializingIfEquals 0>]
       traps: int
       // corrupted soul
+      [<SkipSerializingIfNone>]
       flyingEnemy: EnemyContext option
       [<SkipSerializingIfEquals false>]
       youAreHere: bool
@@ -361,25 +399,63 @@ type MapContext =
       paths: LocationContext list }
 
 type RewardContext =
-    { name: string option
+    { [<SkipSerializingIfNone>]
+      name: string option
+      [<SkipSerializingIfNone>]
       description: string option
+      [<SkipSerializingIfNone>]
       pickTileOptions: TileContext list option
+      [<SkipSerializingIfNone>]
       tileUpgrade: TileUpgradeContext option
+      [<SkipSerializingIfNone>]
       tileSacrificeReward: ShopPrice option
+      [<SkipSerializingIfEquals(false)>]
       warriorsGamble: bool
+      [<SkipSerializingIfNone>]
       rerollPrice: ShopPrice option
+      [<SkipSerializingIfNone>]
       price: ShopPrice option }
+
+type HeroContext =
+    { name: string
+      specialMove: SpecialMoveContext
+      mainDeckUnlocked: bool
+      altDeckUnlocked: bool
+      randomDeckUnlocked: bool
+      maxUnlockedDay: int }
+
+type NewGameContext =
+    { heroes: HeroContext list
+      // Ascension.DescriptionOfBuffActivatedOnDay(2)
+      dayBuffs: string list }
 
 type Context =
     { player: PlayerContext
+      [<SkipSerializingIfNone>]
       shop: ShopContext option
+      [<SkipSerializingIfNone>]
       shop1: RewardContext option
+      [<SkipSerializingIfNone>]
       shop2: ShopContext option
+      [<SkipSerializingIfNone>]
+      newGameOptions: NewGameContext option
+      [<SkipSerializingIfNone>]
       reward: RewardContext option
-      gridCells: CellContext list option }
+      [<SkipSerializingIfNone>]
+      gridCells: CellContext list option
+      [<SkipSerializingIfNone>]
+      map: MapContext option }
 
 module Context =
     let stripTags s = Regex(@"\[[^\]]*\]").Replace(s, "")
+    let stripHtml s = Regex(@"<[^>]*>").Replace(s, "")
+
+    let coinPrice n =
+        { coins = n
+          skulls = 0
+          hp = 0
+          maxHp = 0
+          free = (n = 0) }
 
     let consumable (slot: int option) (potion: Potion) : ConsumableContext =
         { name = Some(stripTags potion.Name)
@@ -392,7 +468,7 @@ module Context =
                 Some(
                     potion.BasePriceForHeroSelling
                     + if PotionsManager.Instance.RogueRetail then 1 else 0
-                    |> Coins
+                    |> coinPrice
                 )
             else
                 None }
@@ -434,9 +510,12 @@ module Context =
           tileEffect = tileEffect tile.Attack.TileEffect
           buyPrice = None
           unlockPrice = None
-          cooldown = Some tile.Attack.Cooldown
-          remainingCooldown = Some tile.TurnsBeforeCharged
-          inAttackQueue = tile.TileContainer :? AttackQueueTileContainer
+          cooldownCharge = Some $"{tile.CooldownCharge}/{tile.Attack.Cooldown}"
+          inAttackQueue =
+            if player then
+                Some(tile.TileContainer :? AttackQueueTileContainer)
+            else
+                None
           upgradeSlotsUsed =
             if player then
                 Some $"{tile.Attack.Level}/{tile.Attack.MaxLevel}"
@@ -454,9 +533,8 @@ module Context =
 
     let specialMove (hero: Hero) : SpecialMoveContext =
         { name = stripTags hero.SpecialAbilityName
-          description = stripTags hero.SpecialAbilityDescription
-          cooldown = hero.SpecialMove.Cooldown.Cooldown
-          remainingCooldown = hero.SpecialMove.Cooldown.Cooldown - hero.SpecialMove.Cooldown.Charge }
+          description = stripHtml hero.SpecialAbilityDescription
+          cooldownCharge = $"{hero.SpecialMove.Cooldown.Charge}/{hero.SpecialMove.Cooldown.Cooldown}" }
 
     let enemy (enemy: Enemy) : EnemyContext =
         let traits =
@@ -467,6 +545,7 @@ module Context =
 
         { name = stripTags enemy.Name
           description = stripTags enemy.Description
+          facingDirection = Dir.ofGame enemy.FacingDir
           traits =
             if Array.isEmpty traits then
                 None
@@ -535,6 +614,14 @@ module Context =
           goHereToOpenShop = false
           goHereToStartNewGame = false }
 
+    let hero (hero: Hero) : HeroContext =
+        { name = stripTags hero.Name
+          specialMove = specialMove hero
+          mainDeckUnlocked = hero.Unlocked
+          altDeckUnlocked = hero.Unlocked && hero.AltDeckUnlocked
+          randomDeckUnlocked = hero.Unlocked && hero.RandomDeckUnlocked
+          maxUnlockedDay = hero.CharacterSaveData.bestDay + 1 }
+
     let player () : PlayerContext =
         let hero = Globals.Hero
         let pm = PotionsManager.Instance
@@ -544,6 +631,7 @@ module Context =
         { name = stripTags hero.Name
           coins = Globals.Coins
           skullMetaCurrency = Globals.KillCount
+          facingDirection = Dir.ofGame hero.FacingDir
           consumables = pm.HeldPotions |> Array.mapi (fun i x -> consumable (Some i) x) |> List.ofArray
           tiles = deck |> Seq.map (fun (s, x) -> tile true (Some s) x) |> List.ofSeq
           specialMove = specialMove hero
@@ -585,7 +673,9 @@ module Context =
           shop1 = shop1
           shop2 = shop2 }
 
-    let map (map: Map) : MapContext =
+    let map () : MapContext =
+        let map = MapManager.Instance.map
+
         { currentLocation = location map.CurrentMapLocation
           paths =
             map.MapLocations
@@ -595,12 +685,16 @@ module Context =
             |> List.ofSeq }
 
     let price (price: Price) : ShopPrice =
+        let ret =
+            { coinPrice 0 with
+                free = (price.Value = 0) }
+
         match price.Currency with
-        | ShopStuff.CurrencyEnum.coins -> Coins price.Value
-        | ShopStuff.CurrencyEnum.meta -> Skulls price.Value
-        | ShopStuff.CurrencyEnum.hp -> Hp price.Value
-        | ShopStuff.CurrencyEnum.maxHP -> MaxHp price.Value
-        | _ -> Coins price.Value
+        | ShopStuff.CurrencyEnum.coins -> { ret with coins = price.Value }
+        | ShopStuff.CurrencyEnum.meta -> { ret with skulls = price.Value }
+        | ShopStuff.CurrencyEnum.hp -> { ret with hp = price.Value }
+        | ShopStuff.CurrencyEnum.maxHP -> { ret with maxHp = price.Value }
+        | _ -> ret
 
     let shop (shop: Shop) : ShopContext =
         let name =
@@ -653,8 +747,8 @@ module Context =
                         :?> string
 
                     let item =
-                        { name = Utils.LocalizationUtils.LocalizedString("Terms", key)
-                          description = item.Description
+                        { name = stripTags (Utils.LocalizationUtils.LocalizedString("Terms", key))
+                          description = stripTags item.Description
                           unlockPrice = price ui.price }
 
                     { ret with
@@ -741,7 +835,7 @@ module Context =
                         :?> TileUpgradeInShop
 
                     None, Some(price upgrade.price)
-                | :? RewardRoom as room -> Some(Coins room.rewardRerolling.RerollPrice), None
+                | :? RewardRoom as room -> Some(coinPrice room.rewardRerolling.RerollPrice), None
                 | _ -> None, None
 
             let name, description, pickTileOptions, tileUpgrade, tileSacrificeReward, warriorsGamble =
@@ -828,7 +922,7 @@ module Context =
                                 .GetValue(reward)
                             :?> int
 
-                        None, None, None, None, Some(Coins coins), false
+                        None, None, None, None, Some(coinPrice coins), false
                     // for warriors gamble, description/details makes sense to show
                     | :? WarriorGambleUpgrade as reward ->
                         Some(stripTags reward.Description), Some(stripTags reward.Details), None, None, None, true
@@ -853,7 +947,7 @@ module Context =
         let mutable cells =
             room.Grid.Cells |> Array.map (cell nobunaga traps) |> List.ofArray
 
-        let shop, shop1, shop2, reward =
+        let shop, shop1, shop2, reward, ngc =
             match room with
             | :? CampRoom as room ->
                 cells <-
@@ -866,24 +960,52 @@ module Context =
                         else
                             x)
 
-                let shop = shop room.UnlocksShop
-                Some shop, None, None, None
+                let ngc =
+                    if room.HeroSelection.goButton.Interactable then
+                        let heroes = room.HeroSelection.heroes |> Array.map hero |> List.ofArray
+                        let maxDay = heroes |> List.map _.maxUnlockedDay |> List.max
+
+                        Some
+                            { heroes = heroes
+                              dayBuffs =
+                                [ 2..maxDay ]
+                                |> List.map (Ascension.DescriptionOfBuffActivatedOnDay >> stripTags) }
+                    else
+                        None
+
+                let shop =
+                    if cells.[0].youAreHere then
+                        Some(shop room.UnlocksShop)
+                    else
+                        None
+
+                shop, None, None, None, ngc
             | :? RewardRoom as room ->
                 let reward = reward room.Reward
 
-                None, None, None, reward
+                None, None, None, reward, None
             | :? ShopRoom as room ->
                 let reward = reward room.TileUpgradeReward
                 let shop = shop room.Shop
-                None, reward, Some shop, None
-            | _ -> None, None, None, None
+                None, reward, Some shop, None, None
+            | _ -> None, None, None, None, None
 
         { player = player ()
           shop = shop
           shop1 = shop1
           shop2 = shop2
           reward = reward
-          gridCells = cells |> Some }
+          newGameOptions = ngc
+          gridCells =
+            if CombatSceneManager.Instance.CurrentMode = CombatSceneManager.Mode.combat then
+                Some cells
+            else
+                None
+          map =
+            if CombatSceneManager.Instance.CurrentMode = CombatSceneManager.Mode.mapSelection then
+                Some(map ())
+            else
+                None }
 
 type Game(plugin: MainClass) =
     inherit Game<Actions>()
@@ -936,6 +1058,8 @@ type Game(plugin: MainClass) =
     let mutable trapCells = List.empty
     let mutable trapCell = null
     let mutable skipDioramaTime = None
+    let mutable isForce = false
+    let mutable forceNames = None
 
     member _.InhibitForces
         with set value =
@@ -957,6 +1081,24 @@ type Game(plugin: MainClass) =
         trapCell <- agent.Cell.Neighbour(agent.FacingDir, 1)
 
     member _.NobunagaCells(cells: Cell list) = nobunagaCells <- cells
+
+    member this.PerformForce(names: string list) =
+        if inhibitForces = 0 then
+            let ctx = Context.context nobunagaCells trapCells
+
+            forceNames <- None
+            isForce <- true
+
+            this.Force(
+                { state = Some(this.Serialize(ctx))
+                  ephemeral_context = true
+                  query =
+                    match CombatSceneManager.Instance.CurrentMode with
+                    | CombatSceneManager.Mode.mapSelection -> "Please pick your next destination"
+                    | CombatSceneManager.Mode.reward -> "Please pick your rewards"
+                    | _ -> "Please pick your next action"
+                  action_names = names }
+            )
 
     member this.ReceiveAttack(agent: Agent, hit: Hit, attacker: Agent) =
         let atkName =
@@ -991,7 +1133,7 @@ type Game(plugin: MainClass) =
         match agent with
         | :? Hero -> $"You have been hit by {atkName} for {hit.Damage} damage.{effects}"
         | :? NobunagaBoss when nobunagaCells |> List.exists ((=) agent.Cell) |> not ->
-            $"Nobunaga got hit by {atkName}, but the attack didn't seem to have any effect..."
+            $"{agent.Name} got hit by {atkName}, but the attack didn't seem to have any effect..."
         | _ -> $"{attacker.Name} has been hit by {atkName}.{effects}"
         |> this.Context false
 
@@ -1061,14 +1203,19 @@ type Game(plugin: MainClass) =
             man.MetaCurrencyReceived.AddListener(fun meta ->
                 ctx $"You got {meta} skulls as a reward for defeating the boss")
 
-            man.EndOfCombatTurn.AddListener(fun () -> ctx "The enemies' turn has ended.")
-            man.BeginningOfCombatTurn.AddListener(fun () -> ctx "It's the enemies' turn...")
+            man.EndOfCombatTurn.AddListener(fun () ->
+                if not (CombatSceneManager.Instance.Room :? CampRoom) then
+                    ctx "The enemies' turn has ended.")
+
+            man.BeginningOfCombatTurn.AddListener(fun () ->
+                if not (CombatSceneManager.Instance.Room :? CampRoom) then
+                    ctx "It's the enemies' turn...")
 
             man.EnterRoom.AddListener(fun room ->
                 ctx (
                     match room with
                     | :? CampRoom as room ->
-                        "You are at the camp - a starting location. Here, you can access the metaprogression shop that unlocks new items for skulls, or you can start the game. A cat is lying around the metaprogression shop."
+                        "You are at the camp - a starting location. Here, you can access the metaprogression shop that unlocks new items for skulls, or you can start the game. The metaprogression shop's owner has a cat."
                         + (if room.UnlocksShop.CanBuyAnything() then
                                " You have items available for purchase in the shop."
                            else
@@ -1136,19 +1283,24 @@ type Game(plugin: MainClass) =
                 ctx $"The skill {name} has been triggered!")
 
             man.SpecialMoveEffectOnTarget.AddListener(fun _hero _target -> ())
-            man.PotionUsed.AddListener(fun _potion -> ())
-            man.HeroIsHit.AddListener(fun struct (_hit, _attacker) -> ())
-            man.HeroHPUpdate.AddListener(fun _hp -> ())
-            man.HeroMaxHPUpdate.AddListener(fun _hp -> ())
-            man.HeroRevived.AddListener(fun () -> ())
-            man.RoomBegin.AddListener(fun _room -> ())
-            man.RoomEnd.AddListener(fun _room -> ())
-            man.MapOpened.AddListener(fun () -> ())
-            man.MapCurrentLocationCleared.AddListener(fun () -> ())
+            man.HeroRevived.AddListener(fun () -> ctx "You've been revived! There won't be a next time!")
+            // man.RoomBegin.AddListener(fun _room -> ())
+
+            man.RoomEnd.AddListener(fun room ->
+                if room.BannerTextEnd <> "" && not (room :? CampRoom) then
+                    ctx $"Fight result: {room.BannerTextEnd}")
+
+            // man.MapOpened.AddListener(fun () -> ())
+            // man.MapCurrentLocationCleared.AddListener(fun () -> ())
             man.RewardBusy.AddListener(fun () -> inhibitForces <- inhibitForces + 1)
             man.RewardReady.AddListener(fun () -> inhibitForces <- inhibitForces - 1)
 
-        this.ReregisterActions()
+        if not isForce then
+            this.ReregisterActions()
+
+        match forceNames with
+        | Some names -> this.PerformForce names
+        | None -> ()
 
         if skipDioramaTime |> Option.exists (fun x -> DateTime.UtcNow < x) then
             let chars =
@@ -1161,17 +1313,27 @@ type Game(plugin: MainClass) =
             skipDioramaTime <- None
 
     override this.ReregisterActions() =
+        this.LogError $"was force {isForce}"
+        isForce <- false
+        let mutable shouldForce = false
+
         if
             CombatManager.Instance = null
             || Globals.Hero = null
             || TilesManager.Instance = null
             || CombatSceneManager.Instance = null
             || PotionsManager.Instance = null
+            || EventsManager.Instance = null
+            // || DioramaManager.Instance = null
+            || UnlocksManager.Instance = null
+            || SkillsManager.Instance = null
+            || MapManager.Instance = null
         then
             ()
         else
             let mutable actions: Action list =
-                [ (this.Action CheatQuick)
+                [
+                (*(this.Action CheatQuick)
                   (this.Action CheatSkipTitle)
                   (this.Action CheatShortLocations)
                   (this.Action CheatInvulnerable)
@@ -1187,13 +1349,15 @@ type Game(plugin: MainClass) =
                   (this.Action CheatMoney)
                   (this.Action CheatSkulls)
                   (this.Action CheatKill)
-                  (this.Action CheatHeal) ]
+                  (this.Action CheatHeal)*) ]
 
             if
                 CombatManager.Instance.CombatInProgress
                 && not CombatManager.Instance.TurnInProgress
                 && CombatManager.Instance.AllowHeroAction
             then
+                shouldForce <- true
+
                 if Globals.Hero.AllowWait then
                     actions <- this.Action Wait :: actions
 
@@ -1259,10 +1423,12 @@ type Game(plugin: MainClass) =
 
                         actions <- play :: actions
 
-            if actions |> List.exists _.Dirty then
-                ()
+            let actions = actions |> List.filter _.Valid
 
             this.RetainActions(actions |> List.map (fun x -> x))
+
+            if shouldForce then
+                forceNames <- Some(actions |> List.map _.Name)
 
     override _.Name = "test"
 
@@ -1537,6 +1703,11 @@ type Game(plugin: MainClass) =
         | SkipRewards -> Error(None)
         | SelectHero(_heroName, _altDeck, _day) -> Error(None)
         | ChoosePath _pathIndex -> Error(None)
+        |> (fun x ->
+            if Result.isOk x then
+                isForce <- false
+
+            x)
 
     override _.LogError error = plugin.Logger.LogError $"{error}"
     override _.LogDebug error = plugin.Logger.LogInfo $"{error}"
