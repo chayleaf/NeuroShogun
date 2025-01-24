@@ -626,7 +626,7 @@ module Context =
           randomDeckUnlocked = hero.Unlocked && hero.RandomDeckUnlocked
           maxUnlockedDay =
             if hero.Unlocked then
-                max 1 (hero.CharacterSaveData.bestDay + 1)
+                min (max 1 (hero.CharacterSaveData.bestDay + 1)) Globals.CurrentlyImplementedMaxDay
             else
                 0 }
 
@@ -1747,6 +1747,22 @@ type Game(plugin: MainClass) =
             | :? ShopRoom as room -> Ok room.Shop
             | _ -> Error(Some "There's no shop in this room!")
 
+        let reward =
+            match CombatSceneManager.Instance.Room with
+            | :? RewardRoom as room -> Ok room.Reward
+            | :? ShopRoom as room ->
+                let upgrade =
+                    typeof<ShopRoom>
+                        .GetField("tileUpgradeInShop", BindingFlags.NonPublic ||| BindingFlags.Instance)
+                        .GetValue(room)
+                    :?> TileUpgradeInShop
+
+                if upgrade.price.CanAfford then
+                    Ok room.TileUpgradeReward
+                else
+                    Error(Some $"You can't afford this, it requires {fmtPrice (upgrade.price)}!")
+            | _ -> Error(Some "There's no shops or rewards in this room!")
+
         match action with
         | CheatQuick ->
             Globals.DeveloperUtils.Quick <- not Globals.DeveloperUtils.Quick
@@ -1970,7 +1986,7 @@ type Game(plugin: MainClass) =
                             )
 
                     context))
-        | PlayTile name ->
+        | PlayTile tileName ->
             combatError false
             |> chk TilesManager.Instance.CanInteractWithTiles "You can't currently use tiles"
             |> chk Globals.Hero.AttackQueue.CanAddTile "Your attack queue is full"
@@ -1978,20 +1994,18 @@ type Game(plugin: MainClass) =
                 (CombatSceneManager.Instance.CurrentMode = CombatSceneManager.Mode.combat)
                 "You are not currently in combat"
             |> Result.bind (fun () ->
-                let deck = Context.deck () |> Map.ofSeq
-
-                match Map.tryFind name deck with
-                | Some tile -> Ok tile
-                | None -> Error(Some $"Tile not found: {name}"))
+                match Context.deck () |> Seq.tryFind (fst >> (=) tileName) with
+                | Some tile -> Ok(snd tile)
+                | None -> Error(Some $"This tile is not in your deck: {tileName}"))
             |> Result.bind (fun tile ->
                 Ok(tile)
                 |> chk tile.TileIsEnabled "The tile is currently on cooldown"
                 |> chk
                     (tile.TileContainer :? HandTileContainer)
                     (if (tile.TileContainer :? AttackQueueTileContainer) then
-                         "The title is already in the attack queue"
+                         "The tile is already in the attack queue"
                      else
-                         "The title is not currently in your hand"))
+                         "The tile is not currently in your hand"))
             |> Result.map (fun tile ->
                 tile.TileContainer.UponTileSubmit()
                 None)
@@ -2239,15 +2253,266 @@ type Game(plugin: MainClass) =
                 Ok None
             | _ -> Error(Some "You are not currently in a shop")
         // rewards
-        | ApplyUpgrade _tileName -> Error(None)
-        | GambleTile _tileName -> Error(None)
-        | PickTileReward _tileName -> Error(None)
-        | SacrificeTile _tileName -> Error(None)
-        | RerollRewards -> Error(None)
-        | SkipRewards -> Error(None)
+        | ApplyUpgrade tileName ->
+            reward
+            |> chk TilesManager.Instance.CanInteractWithTiles "You can't currently use tiles"
+            |> chk
+                (CombatSceneManager.Instance.CurrentMode = CombatSceneManager.Mode.reward)
+                "You are not currently in reward mode"
+            |> Result.bind (fun reward ->
+                match Context.deck () |> Seq.tryFind (fst >> (=) tileName) with
+                | Some(_, tile) ->
+                    Ok(reward, tile)
+                    |> chk tile.TileIsEnabled "The tile is currently on cooldown"
+                    |> chk
+                        (tile.TileContainer :? HandTileContainer)
+                        (if (tile.TileContainer :? AttackQueueTileContainer) then
+                             "The tile is already in the attack queue"
+                         else
+                             "The tile is not currently in your hand")
+                | None -> Error(Some $"This tile is not in your deck: {tileName}"))
+            |> Result.bind (fun (reward, tile) ->
+                match reward with
+                | :? TileUpgradeReward as reward ->
+                    match reward.TileUpgrade with
+                    | :? AddAttackEffectTileUpgrade
+                    | :? AddTileEffectTileUpgrade
+                    | :? StatsTileUpgrade ->
+                        let txt = reward.TileUpgrade.CannotUpgradeText(tile)
+
+                        if txt = "" then
+                            Ok(reward, tile)
+                        else
+                            Error(Some(stripTags txt))
+                    | _ -> Error(Some "You can't use this action in this location")
+                | _ -> Error(Some "You can't use this action in this location"))
+            |> Result.bind (fun (reward, tile) ->
+                tile.TileContainer.UponTileSubmit()
+                // CanBeNavigatedTo is cc.HasTile here
+                if reward.CanBeNavigatedTo then
+                    reward.DecisionTaken()
+                    Ok None
+                else
+                    Error(Some "Unknown mod error"))
+        | GambleTile tileName ->
+            reward
+            |> chk TilesManager.Instance.CanInteractWithTiles "You can't currently use tiles"
+            |> chk
+                (CombatSceneManager.Instance.CurrentMode = CombatSceneManager.Mode.reward)
+                "You are not currently in reward mode"
+            |> Result.bind (fun reward ->
+                match Context.deck () |> Seq.tryFind (fst >> (=) tileName) with
+                | Some(_, tile) ->
+                    Ok(reward, tile)
+                    |> chk tile.TileIsEnabled "The tile is currently on cooldown"
+                    |> chk
+                        (tile.TileContainer :? HandTileContainer)
+                        (if (tile.TileContainer :? AttackQueueTileContainer) then
+                             "The tile is already in the attack queue"
+                         else
+                             "The tile is not currently in your hand")
+                | None -> Error(Some $"This tile is not in your deck: {tileName}"))
+            |> Result.bind (fun (reward, tile) ->
+                match reward with
+                | :? TileUpgradeReward as reward ->
+                    match reward.TileUpgrade with
+                    | :? WarriorGambleUpgrade ->
+                        let txt = reward.TileUpgrade.CannotUpgradeText(tile)
+
+                        if txt = "" then
+                            Ok(reward, tile)
+                        else
+                            Error(Some(stripTags txt))
+                    | _ -> Error(Some "You can't use this action in this location")
+                | _ -> Error(Some "You can't use this action in this location"))
+            |> Result.bind (fun (reward, tile) ->
+                tile.TileContainer.UponTileSubmit()
+                // CanBeNavigatedTo is cc.HasTile here
+                if reward.CanBeNavigatedTo then
+                    reward.DecisionTaken()
+                    Ok None
+                else
+                    Error(Some "Unknown mod error"))
+        | SacrificeTile tileName ->
+            reward
+            |> chk TilesManager.Instance.CanInteractWithTiles "You can't currently use tiles"
+            |> chk
+                (CombatSceneManager.Instance.CurrentMode = CombatSceneManager.Mode.reward)
+                "You are not currently in reward mode"
+            |> Result.bind (fun reward ->
+                match Context.deck () |> Seq.tryFind (fst >> (=) tileName) with
+                | Some(_, tile) ->
+                    Ok(reward, tile)
+                    |> chk tile.TileIsEnabled "The tile is currently on cooldown"
+                    |> chk
+                        (tile.TileContainer :? HandTileContainer)
+                        (if (tile.TileContainer :? AttackQueueTileContainer) then
+                             "The tile is already in the attack queue"
+                         else
+                             "The tile is not currently in your hand")
+                | None -> Error(Some $"This tile is not in your deck: {tileName}"))
+            |> Result.bind (fun (reward, tile) ->
+                match reward with
+                | :? TileUpgradeReward as reward ->
+                    match reward.TileUpgrade with
+                    | :? SacrificeTileUpgrade ->
+                        let txt = reward.TileUpgrade.CannotUpgradeText(tile)
+
+                        if txt = "" then
+                            Ok(reward, tile)
+                        else
+                            Error(Some(stripTags txt))
+                    | _ -> Error(Some "You can't use this action in this location")
+                | _ -> Error(Some "You can't use this action in this location"))
+            |> Result.bind (fun (reward, tile) ->
+                tile.TileContainer.UponTileSubmit()
+                // CanBeNavigatedTo is cc.HasTile here
+                if reward.CanBeNavigatedTo then
+                    reward.DecisionTaken()
+                    Ok None
+                else
+                    Error(Some "Unknown mod error"))
+        | PickTileReward tileName ->
+            reward
+            |> chk TilesManager.Instance.CanInteractWithTiles "You can't currently use tiles"
+            |> chk
+                (CombatSceneManager.Instance.CurrentMode = CombatSceneManager.Mode.reward)
+                "You are not currently in reward mode"
+            |> Result.bind (fun reward ->
+                match reward with
+                | :? NewTileReward as reward ->
+                    let _, map = Context.deckMap ()
+
+                    let pickTileOptions =
+                        reward.NewTilePedestals
+                        |> Array.mapFold
+                            (fun state p ->
+                                let name = stripTags p.Tile.Attack.Name
+
+                                match Map.tryFind name state with
+                                | Some count -> (($"{name} ({count + 1})", p), Map.add name (count + 1) state)
+                                | None -> ((name, p), Map.add name 1 state))
+                            map
+                        |> fst
+
+                    match pickTileOptions |> Array.tryFind (fst >> (=) tileName) with
+                    | Some(_, tile) -> Ok tile
+                    | None ->
+                        Error(
+                            Some
+                                $"This tile is not available here, available options are: {this.Serialize(Array.map fst pickTileOptions)}"
+                        )
+                | _ -> Error(Some "You can't use this action in this location"))
+            |> Result.map (fun tile ->
+                tile.OnButtonClick()
+                None)
+        | RerollRewards ->
+            match CombatSceneManager.Instance.Room with
+            | :? RewardRoom as room ->
+                if room.rewardRerolling.rerollButton.Interactable then
+                    let price = room.rewardRerolling.RerollPrice
+                    room.rewardRerolling.RerollButtonPressed()
+                    Ok(Some $"Rerolled reward for {price} coins, you now have {Globals.Coins} coins")
+                elif Globals.Coins < room.rewardRerolling.RerollPrice then
+                    Error(
+                        Some
+                            $"Rerolling currently costs {room.rewardRerolling.RerollPrice} coins, while you only have {Globals.Coins} coins"
+                    )
+                else
+                    Error(Some "Can't reroll at the moment")
+            | _ -> Error(Some "There's no reward to reroll")
+        | SkipRewards ->
+            match CombatSceneManager.Instance.Room with
+            | :? RewardRoom as room ->
+                if room.Reward.InProgress && room.skipButton.Interactable then
+                    room.SkipButtonPressed()
+                    Ok None
+                else
+                    Error(Some "Can't skip, the reward is probably already being skipped")
+            | _ -> Error(Some "There's no reward to skip")
         // nav
-        | NewGame(_heroName, _altDeck, _day) -> Error(None)
-        | ChoosePath _pathIndex -> Error(None)
+        | NewGame(heroName, deck, day) ->
+            match CombatSceneManager.Instance.Room with
+            | :? CampRoom as room ->
+                let sel = room.HeroSelection
+
+                let locked =
+                    typeof<HeroSelection>
+                        .GetField("transitionInProgress", BindingFlags.NonPublic ||| BindingFlags.Instance)
+                        .GetValue(shop)
+                    :?> bool
+
+                match
+                    sel.heroes
+                    |> Array.mapi (fun i x -> i, x)
+                    |> Array.tryFind (snd >> _.Name >> stripTags >> (=) heroName)
+                with
+                | _ when locked -> Error(Some "A new game is already starting, please wait...")
+                | Some(i, hero) when hero.Unlocked ->
+                    let deckUnlocked =
+                        match deck with
+                        | Main -> true
+                        | Alt -> hero.AltDeckUnlocked
+                        | Random -> hero.RandomDeckUnlocked
+
+                    let dayUnlocked =
+                        min (max 1 (hero.CharacterSaveData.bestDay + 1)) Globals.CurrentlyImplementedMaxDay
+
+
+                    if day > dayUnlocked then
+                        Error(
+                            Some
+                                $"Max unlocked day for this hero is {day}! Beat the game on a lower day to unlock higher days."
+                        )
+                    elif not deckUnlocked then
+                        Error(
+                            Some
+                                "You haven't unlocked this deck! Alt deck is unlocked by collecting 3 hero stamps, random deck is unlocked by beating the game on day 4"
+                        )
+                    else
+                        sel.UpdateDay day
+                        sel.HeroIndexUpdate i
+                        Ok None
+                | Some(_, hero) ->
+                    Error(
+                        Some
+                            $"This hero is not yet unlocked, the unlock quest is: {stripTags hero.QuestForUnlocking.Description}"
+                    )
+                | None ->
+                    let names = sel.heroes |> Array.map (_.Name >> stripTags) |> this.Serialize
+                    Error(Some $"No hero with this name! Available heroes: {names}")
+            | _ -> Error(Some "Can't start a new game, you are not in the camp")
+        | ChoosePath pathIndex ->
+            if
+                CombatSceneManager.Instance.CurrentMode = CombatSceneManager.Mode.mapSelection
+                && not MapManager.Instance.map.MovingInProgress
+                && MapManager.Instance.map.LocationSelectionMode
+            then
+                let loc =
+                    MapManager.Instance.map.MapLocations
+                    |> Seq.filter _.Reachable
+                    |> Seq.filter _.Uncovered
+                    |> Seq.mapi (fun i x -> i, x)
+                    |> Seq.tryFind (fst >> (=) pathIndex)
+                    |> Option.map snd
+
+                match loc with
+                | Some loc ->
+                    if MapManager.Instance.map.SelectLocation loc then
+                        Ok None
+                    else
+                        Error(Some "Unknown mod error")
+                | None ->
+                    let map = Context.map ()
+                    let minIdx = map.paths |> List.map _.pathIndex.Value |> List.min
+                    let maxIdx = map.paths |> List.map _.pathIndex.Value |> List.max
+
+                    Error(
+                        Some
+                            $"Index out of bounds, the currently available range is from {minIdx} to {maxIdx} (inclusive)"
+                    )
+            else
+                Error(Some "You can't yet select the next location")
         |> (fun x ->
             if Result.isOk x then
                 isForce <- false

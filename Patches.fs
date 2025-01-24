@@ -113,3 +113,8 @@ type public Patches() =
     static member DioramaAnyKeyVis(value: bool) =
         if value then
             MainClass.Instance.Game.ScheduleDioramaSkip()
+
+    [<HarmonyPatch(typeof<HeroSelection>, "SwitchHeroCoroutine")>]
+    [<HarmonyPostfix>]
+    static member HeroSwitched(__result: IEnumerator byref, __instance: HeroSelection) =
+        __result <- EnumeratorWrapper(__result, ignore, (fun () -> __instance.GoToNextRoom()))
