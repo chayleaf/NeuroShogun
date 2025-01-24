@@ -60,6 +60,15 @@ type Deck =
     | Alt
     | Random
 
+module Deck =
+    let ofStr s =
+        match s with
+        | "main" -> Main
+        | "alt" -> Alt
+        | "random" -> Random
+        | s -> raise (Exception($"invalid deck in enum, expected main/alt/random, got {s}"))
+
+
 type Observatory<'T when 'T: equality>(func: unit -> 'T) =
     let mutable value = None
 
@@ -141,7 +150,7 @@ type Actions =
     | [<Action("play_tile", "Add an attack to your tile queue (ends your turn)")>] PlayTile of tileName: string
     // available when PotionsManager.Instance.HeldPotions isnt empty
     // mutability: list all potions that CanBeUsed
-    | [<Action("consume", "Consume an item (does not end your turn)")>] Consume of itemName: string
+    | [<Action("consume", "Consume an item (does not end your turn)")>] Consume of consumableName: string
     // available: when ShopRoom.Shop contains SkillShopItemData
     // mutability: list all that CanBeSold
     | [<Action("buy_skill", "Purchase a skill")>] BuySkill of skillName: string
@@ -161,7 +170,7 @@ type Actions =
     | [<Action("unlock_tile", "Purchase a tile unlock")>] UnlockTile of tileName: string
     // available: when RewardRoom.Reward.TileUpgrade is WarriorGambleUpgrade
     // note: _CanUpgradeTileAndWhy, CannotUpgradeText
-    | [<Action("warriors_gamble", "Reroll a tile, changing its attack and randomizing its upgrades")>] RerollTile of
+    | [<Action("warriors_gamble", "Reroll a tile, changing its attack and randomizing its upgrades")>] GambleTile of
         tileName: string
     | [<Action("apply_upgrade", "Apply the upgrade to a tile")>] ApplyUpgrade of tileName: string
     // available: when RewardRoom.Reward.TileUpgrade is SacrificeTileUpgrade
@@ -183,8 +192,8 @@ type Actions =
     | [<Action("continue", "Exit the shop and move on")>] Continue
     // campRoom.HeroSelection   .StartingDeckSelection   .RerollDeck
     // IS ON A DELAY of openDelay
-    | [<Action("select_hero",
-               "Choose a hero to play as. Day is the ascension level, higher games are harder but unlock more.")>] SelectHero of
+    | [<Action("new_game",
+               "Start a new game, choosing a hero to play as. Day is the ascension level, higher games are harder but unlock more.")>] NewGame of
         heroName: string *
         deck: Deck *
         day: int
@@ -320,7 +329,9 @@ type PlayerContext =
       cursed: bool }
 
 type LocationContext =
-    { island: string
+    { [<SkipSerializingIfNone>]
+      pathIndex: int option
+      island: string
       name: string
       [<SkipSerializingIfNone>]
       shop1: string option
@@ -414,6 +425,7 @@ type HeroContext =
       mainDeckUnlocked: bool
       altDeckUnlocked: bool
       randomDeckUnlocked: bool
+      [<SkipSerializingIfEquals(0)>]
       maxUnlockedDay: int }
 
 type NewGameContext =
@@ -612,7 +624,11 @@ module Context =
           mainDeckUnlocked = hero.Unlocked
           altDeckUnlocked = hero.Unlocked && hero.AltDeckUnlocked
           randomDeckUnlocked = hero.Unlocked && hero.RandomDeckUnlocked
-          maxUnlockedDay = hero.CharacterSaveData.bestDay + 1 }
+          maxUnlockedDay =
+            if hero.Unlocked then
+                max 1 (hero.CharacterSaveData.bestDay + 1)
+            else
+                0 }
 
     let player () : PlayerContext =
         let hero = Globals.Hero
@@ -639,7 +655,7 @@ module Context =
           remainingPoisonedDuration = hero.AgentStats.poison
           cursed = hero.AgentStats.curse }
 
-    let location (loc: MapLocation) : LocationContext =
+    let location (pathIndex: int option) (loc: MapLocation) : LocationContext =
         let loc = loc.location
 
         let shop =
@@ -650,7 +666,8 @@ module Context =
             | :? ShopLocation as loc -> Some(shop loc.leftShopComponent), Some(shop loc.rightShopComponent)
             | _ -> None, None
 
-        { name = stripTags loc.Name
+        { pathIndex = pathIndex
+          name = stripTags loc.Name
           island =
             match loc.island with
             | ProgressionEnums.IslandEnum.green -> "Green"
@@ -668,12 +685,12 @@ module Context =
     let map () : MapContext =
         let map = MapManager.Instance.map
 
-        { currentLocation = location map.CurrentMapLocation
+        { currentLocation = location None map.CurrentMapLocation
           paths =
             map.MapLocations
             |> Seq.filter _.Reachable
             |> Seq.filter _.Uncovered
-            |> Seq.map location
+            |> Seq.mapi (fun i x -> location (Some i) x)
             |> List.ofSeq }
 
     let price (price: Price) : ShopPrice =
@@ -947,6 +964,18 @@ module Context =
                   price = price
                   rerollPrice = rerollPrice }
 
+    let newGame (room: CampRoom) : NewGameContext option =
+        if room.HeroSelection.goButton.Interactable then
+            let heroes = room.HeroSelection.heroes |> Array.map hero |> List.ofArray
+            let maxDay = heroes |> List.map _.maxUnlockedDay |> List.max
+
+            Some
+                { heroes = heroes
+                  dayBuffs =
+                    [ 2..maxDay ]
+                    |> List.map (fun i -> $"Day {i} - {stripTags (Ascension.DescriptionOfBuffActivatedOnDay i)}") }
+        else
+            None
 
     let context (nobunaga: Cell list) (traps: (Cell * Trap) list) : Context =
         let room = CombatSceneManager.Instance.Room
@@ -967,19 +996,7 @@ module Context =
                         else
                             x)
 
-                let ngc =
-                    if room.HeroSelection.goButton.Interactable then
-                        let heroes = room.HeroSelection.heroes |> Array.map hero |> List.ofArray
-                        let maxDay = heroes |> List.map _.maxUnlockedDay |> List.max
-
-                        Some
-                            { heroes = heroes
-                              dayBuffs =
-                                [ 2..maxDay ]
-                                |> List.map (fun i ->
-                                    $"Day {i} - {stripTags (Ascension.DescriptionOfBuffActivatedOnDay i)}") }
-                    else
-                        None
+                let ngc = newGame room
 
                 let shop =
                     cells.[0].youAreHereAndFacing
@@ -1263,7 +1280,17 @@ type Game(plugin: MainClass) =
             man.GameOver.AddListener(fun win ->
                 nobunagaCells <- List.empty
                 trapCells <- List.empty
-                ctx (if win then "Congratulations, you won!" else "You died..."))
+
+                ctx (
+                    if win then
+                        $"Congratulations, you won on day (difficulty/ascension level) {Globals.Day}/7!"
+                    else
+                        match Globals.Hero.LastAttacker with
+                        | :? Hero -> "You committed seppuku..."
+                        | null -> "You died"
+                        | :? Boss as boss -> $"You were slain by {boss.Name}"
+                        | enemy -> $"You were slain by a {enemy.Name}"
+                ))
 
             man.ShogunDefeated.AddListener(fun () -> ctx "You have defeated the final boss!")
             // man.EnemyDied.AddListener(fun _enemy -> ())
@@ -1434,10 +1461,95 @@ type Game(plugin: MainClass) =
                 | { maxHp = maxHp } when maxHp > 0 -> $"{maxHp} max HP"
                 | _ -> "free"
 
-            match CombatSceneManager.Instance.Room with
-            | :? CampRoom as room -> Some room.UnlocksShop
-            | :? ShopRoom as room -> Some room.Shop
-            | _ -> None
+            let shop, reward =
+                match CombatSceneManager.Instance.Room with
+                | :? CampRoom as room ->
+                    if Array.last room.Grid.Cells = Globals.Hero.Cell then
+                        let ngc = Context.newGame room
+
+                        match ngc with
+                        | Some ngc ->
+                            shouldForce <- true
+                            let maxDay = ngc.heroes |> List.map _.maxUnlockedDay |> List.max
+                            let main = ngc.heroes |> List.exists _.mainDeckUnlocked
+                            let alt = ngc.heroes |> List.exists _.altDeckUnlocked
+                            let rand = ngc.heroes |> List.exists _.randomDeckUnlocked
+
+                            let names =
+                                ngc.heroes
+                                |> Array.ofList
+                                |> Array.filter _.mainDeckUnlocked
+                                |> Array.map _.name
+
+                            let decks =
+                                (if main then [ Main ] else [])
+                                @ (if alt then [ Alt ] else [])
+                                @ (if rand then [ Random ] else [])
+
+                            let act = this.Action NewGame
+                            act.MutateProp "heroName" (fun x -> (x :?> StringSchema).SetEnum names)
+
+                            act.MutateProp "deck" (fun x ->
+                                (x :?> StringSchema).RetainEnum(fun s -> List.contains (Deck.ofStr s) decks))
+
+                            act.MutateProp "day" (fun x ->
+                                let x = x :?> IntegerSchema
+                                x.Minimum <- Some 1
+                                x.Maximum <- Some maxDay)
+
+                            actions <- act :: actions
+
+                            None, None
+                        | None -> None, None
+                    elif Array.head room.Grid.Cells = Globals.Hero.Cell then
+                        Some room.UnlocksShop, None
+                    else
+                        None, None
+                | :? RewardRoom as room ->
+                    if room.Reward.InProgress && room.skipButton.Interactable then
+                        let act = this.Action SkipRewards
+                        actions <- act :: actions
+
+                    if room.rewardRerolling.rerollButton.Interactable then
+                        let act = this.Action RerollRewards
+                        actions <- act :: actions
+
+                    if room.Busy then
+                        None, None
+                    else
+                        shouldForce <- true
+                        None, Some room.Reward
+                | :? ShopRoom as room ->
+                    let goBtn =
+                        typeof<ShopRoom>
+                            .GetField("goButton", BindingFlags.NonPublic ||| BindingFlags.Instance)
+                            .GetValue(room)
+                        :?> MyButton
+
+                    if goBtn.gameObject.activeSelf then
+                        let act = this.Action Continue
+                        actions <- act :: actions
+
+                    Some room.Shop, Some room.TileUpgradeReward
+                | _ -> None, None
+
+            if
+                CombatSceneManager.Instance.CurrentMode = CombatSceneManager.Mode.mapSelection
+                && not MapManager.Instance.map.MovingInProgress
+                && MapManager.Instance.map.LocationSelectionMode
+            then
+                shouldForce <- true
+                let map = Context.map ()
+                let act = this.Action ChoosePath
+                let minIdx = map.paths |> List.map _.pathIndex.Value |> List.min
+                let maxIdx = map.paths |> List.map _.pathIndex.Value |> List.max
+
+                act.MutateProp "pathIndex" (fun x ->
+                    let x = x :?> IntegerSchema
+                    x.Minimum <- Some minIdx
+                    x.Maximum <- Some maxIdx)
+
+            shop
             |> Option.iter (fun shop ->
                 let ctx = Context.shop true shop
                 shouldForce <- true
@@ -1496,8 +1608,8 @@ type Game(plugin: MainClass) =
 
                 ctx.consumables
                 |> Option.iter (fun cs ->
-                    let n1 = cs |> Array.ofList |> chooseMap _.unlockPrice (_.name >> _.Value)
-                    let n2 = cs |> Array.ofList |> chooseMap _.buyPrice (_.name >> _.Value)
+                    let n1 = cs |> Array.ofList |> chooseMap _.unlockPrice _.name.Value
+                    let n2 = cs |> Array.ofList |> chooseMap _.buyPrice _.name.Value
                     let act = this.Action UnlockConsumable
                     act.MutateProp "consumableName" (fun x -> (x :?> StringSchema).SetEnum(n1))
                     actions <- act :: actions
@@ -1505,14 +1617,61 @@ type Game(plugin: MainClass) =
                     act.MutateProp "consumableName" (fun x -> (x :?> StringSchema).SetEnum(n2))
                     actions <- act :: actions))
 
+            reward
+            |> Option.bind (fun x -> Option.map (fun y -> x, y) (Context.reward x))
+            |> Option.iter (fun (reward, ctx) ->
+                match reward with
+                | :? NewTileReward ->
+                    ctx.pickTileOptions
+                    |> Option.iter (fun opts ->
+                        let names = Array.ofList opts |> Array.map _.name
+                        let act = this.Action PickTileReward
+                        act.MutateProp "tileName" (fun x -> (x :?> StringSchema).SetEnum(names))
+                        actions <- act :: actions)
+                | :? TileUpgradeReward as reward ->
+                    let deck =
+                        Context.deck ()
+                        |> Seq.filter (snd >> reward.TileUpgrade.CanUpgradeTile)
+                        |> Seq.map fst
+                        |> Array.ofSeq
+
+                    ctx.tileUpgrade
+                    |> Option.iter (fun _ ->
+                        let act = this.Action ApplyUpgrade
+                        act.MutateProp "tileName" (fun x -> (x :?> StringSchema).SetEnum(deck))
+                        actions <- act :: actions)
+
+                    ctx.tileSacrificeReward
+                    |> Option.iter (fun _ ->
+                        let act = this.Action SacrificeTile
+                        act.MutateProp "tileName" (fun x -> (x :?> StringSchema).SetEnum(deck))
+                        actions <- act :: actions)
+
+                    if ctx.warriorsGamble then
+                        let act = this.Action GambleTile
+                        act.MutateProp "tileName" (fun x -> (x :?> StringSchema).SetEnum(deck))
+                        actions <- act :: actions
+                | _ -> this.LogError "Unknown reward")
+
             let potions =
                 PotionsManager.Instance.HeldPotions
+                |> Array.filter (_.AlreadyUsed >> not)
                 |> Array.filter _.CanBeUsed
                 |> Array.map _.Name
 
             let usePotion = this.Action Consume
-            usePotion.MutateProp "itemName" (fun x -> (x :?> StringSchema).SetEnum(potions))
+            usePotion.MutateProp "consumableName" (fun x -> (x :?> StringSchema).SetEnum(potions))
             actions <- usePotion :: actions
+
+            let potions =
+                PotionsManager.Instance.HeldPotions
+                |> Array.filter (_.AlreadyUsed >> not)
+                |> Array.filter _.CanBeSold
+                |> Array.map _.Name
+
+            let sellPotion = this.Action SellConsumable
+            sellPotion.MutateProp "consumableName" (fun x -> (x :?> StringSchema).SetEnum(potions))
+            actions <- sellPotion :: actions
 
             let actions = actions |> List.filter _.Valid
 
@@ -1837,13 +1996,13 @@ type Game(plugin: MainClass) =
                 tile.TileContainer.UponTileSubmit()
                 None)
 
-        | Consume itemName ->
+        | Consume consumableName ->
             let room = CombatSceneManager.Instance.Room
 
             match
                 PotionsManager.Instance.HeldPotions
                 |> Array.filter (_.AlreadyUsed >> not)
-                |> Array.tryFind (_.Name >> Context.stripTags >> (=) itemName)
+                |> Array.tryFind (_.Name >> Context.stripTags >> (=) consumableName)
             with
             | Some potion when potion.CanBeUsed ->
                 let hadShield = Globals.Hero.AgentStats.shield
@@ -2042,17 +2201,52 @@ type Game(plugin: MainClass) =
             shop
             |> findService ShopStuff.ShopServiceEnum.get10Coins
             |> finalizePurchase "10 coins"
-        | SellConsumable _consumableName -> Error(None)
+        | SellConsumable consumableName ->
+            match
+                PotionsManager.Instance.HeldPotions
+                |> Array.filter (_.AlreadyUsed >> not)
+                |> Array.tryFind (_.Name >> Context.stripTags >> (=) consumableName)
+            with
+            | Some potion when potion.CanBeSold ->
+                let price =
+                    potion.BasePriceForHeroSelling
+                    + if PotionsManager.Instance.RogueRetail then 1 else 0
+
+                potion.SellConsumable()
+                Ok(Some $"Sold consumable for {price} coins, you now have {Globals.Coins} coins")
+            | Some _ ->
+                match CombatSceneManager.Instance.CurrentMode with
+                | CombatSceneManager.Mode.transition
+                | CombatSceneManager.Mode.mapSelection -> "You can't sell consumables right now"
+                | _ -> "You can only sell consumables in shops"
+                |> (Some >> Error)
+            | None ->
+                $"This consumable doesn't exist, existing consumables: {PotionsManager.Instance.HeldPotions
+                                                                        |> Array.map (_.Name >> Context.stripTags)
+                                                                        |> List.ofArray
+                                                                        |> this.Serialize}"
+                |> (Some >> Error)
+        | Continue ->
+            match CombatSceneManager.Instance.Room with
+            | :? ShopRoom as room ->
+                let goBtn =
+                    typeof<ShopRoom>
+                        .GetField("goButton", BindingFlags.NonPublic ||| BindingFlags.Instance)
+                        .GetValue(room)
+                    :?> MyButton
+
+                goBtn.Click()
+                Ok None
+            | _ -> Error(Some "You are not currently in a shop")
+        // rewards
         | ApplyUpgrade _tileName -> Error(None)
-        | RerollTile _tileName -> Error(None)
+        | GambleTile _tileName -> Error(None)
         | PickTileReward _tileName -> Error(None)
         | SacrificeTile _tileName -> Error(None)
-        // services
-        | Continue -> Error(None)
-        // skip
         | RerollRewards -> Error(None)
         | SkipRewards -> Error(None)
-        | SelectHero(_heroName, _altDeck, _day) -> Error(None)
+        // nav
+        | NewGame(_heroName, _altDeck, _day) -> Error(None)
         | ChoosePath _pathIndex -> Error(None)
         |> (fun x ->
             if Result.isOk x then
