@@ -27,6 +27,12 @@ type public Patches() =
         MainClass.Instance.Game.InhibitForces <- true
         __result <- EnumeratorWrapper(__result, ignore, (fun () -> MainClass.Instance.Game.InhibitForces <- false))
 
+    [<HarmonyPatch(typeof<RainOfMirrorsEffect>, "PerformEffect")>]
+    [<HarmonyPostfix>]
+    static member PerformRainOfMirrors(__result: IEnumerator byref) =
+        MainClass.Instance.Game.InhibitForces <- true
+        __result <- EnumeratorWrapper(__result, ignore, (fun () -> MainClass.Instance.Game.InhibitForces <- false))
+
     [<HarmonyPatch(typeof<Shop>, "ItemBoughtSequenceBegin")>]
     [<HarmonyPostfix>]
     static member ShopLock() =

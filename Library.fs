@@ -144,51 +144,43 @@ type Actions =
     | [<Action("consume", "Consume an item (does not end your turn)")>] Consume of itemName: string
     // available: when ShopRoom.Shop contains SkillShopItemData
     // mutability: list all that CanBeSold
-    | [<Action("buy_skill", "Purchase a skill for coins")>] BuySkill of skillName: string
+    | [<Action("buy_skill", "Purchase a skill")>] BuySkill of skillName: string
     // available: when ShopRoom.Shop contains ConsumableShopItem
     // mutability: list all that CanBeSold
-    | [<Action("buy_consumable", "Purchase a consumable for coins")>] BuyConsumable of consumableName: string
+    | [<Action("buy_consumable", "Purchase a consumable")>] BuyConsumable of consumableName: string
     // available: when Potion.CanBeSold
     // mutability: list all that CanBeSold
-    | [<Action("sell_consumable", "Sell a consumable for coins")>] SellConsumable of consumableName: string
+    | [<Action("sell_consumable", "Sell a consumable")>] SellConsumable of consumableName: string
     // available: when ShopRoom.Shop contains ShopUpgradeShopItem
     // mutability: list all that CanBeSold
-    | [<Action("unlock_shop_upgrade", "Unlock a shop upgrade for skulls")>] UnlockShopUpgrade of upgradeName: string
+    | [<Action("unlock_shop_upgrade", "Purchase a shop upgrade")>] UnlockShopUpgrade of upgradeName: string
     // available: when ShopRoom.Shop contains UnlockShopItemData, or maybe campRoom.UnlocksShop
     // mutability: list all that CanBeSold
-    | [<Action("unlock_consumable", "Unlock a consumable for skulls")>] UnlockConsumable of consumableName: string
-    | [<Action("unlock_skill", "Unlock a skill for skulls")>] UnlockSkill of skillName: string
+    | [<Action("unlock_consumable", "Purchase a consumable unlock")>] UnlockConsumable of consumableName: string
+    | [<Action("unlock_skill", "Purchase a skill unlock")>] UnlockSkill of skillName: string
+    | [<Action("unlock_tile", "Purchase a tile unlock")>] UnlockTile of tileName: string
     // available: when RewardRoom.Reward.TileUpgrade is WarriorGambleUpgrade
     // note: _CanUpgradeTileAndWhy, CannotUpgradeText
     | [<Action("warriors_gamble", "Reroll a tile, changing its attack and randomizing its upgrades")>] RerollTile of
         tileName: string
-    | [<Action("upgrade_tile_stats", "Upgrade a tile's stats: %s")>] UpgradeTile of tileName: string
-    // available: when RewardRoom.Reward.TileUpgrade is AddAttackEffectTileUpgrade
-    | [<Action("add_attack_effect",
-               "Add an attack effect to a tile: %s. If the tile already has an attack effect, the previous effect will be overwritten!")>] AddAttackEffect of
-        tileName: string
-    // available: when RewardRoom.Reward.TileUpgrade is AddTileEffectTileUpgrade
-    | [<Action("add_tile_effect",
-               "Add a tile effect to a tile: %s. If the tile already has a tile effect, the previous effect will be overwritten!")>] AddTileEffect of
-        tileName: string
+    | [<Action("apply_upgrade", "Apply the upgrade to a tile")>] ApplyUpgrade of tileName: string
     // available: when RewardRoom.Reward.TileUpgrade is SacrificeTileUpgrade
-    | [<Action("sacrifice_tile", "Sacrifice a tile for %d coins")>] SacrificeTile of tileName: string
+    | [<Action("sacrifice_tile", "Sacrifice a tile")>] SacrificeTile of tileName: string
     // available: when RewardRoom.Reward is NewTileReward
     | [<Action("pick_tile_reward", "Pick a tile reward out of the options available")>] PickTileReward of
         tileName: string
     // available: when ShopServiceEnum.get5Coins or get10Coins
-    | [<Action("buy_coins", "Buy coins from the shop")>] BuyCoins
+    | [<Action("buy_5_coins", "Purchase 5 coins from the shop")>] Buy5Coins
+    | [<Action("buy_10_coins", "Purchase 5 coins from the shop")>] Buy10Coins
     // available: when ShopServiceEnum.heal
-    | [<Action("heal", "Fully heal for %d coins")>] Heal
-    // available: when ShopServiceEnum.reroll
-    //            when rewardRoom.rewardRerolling.rerollButton.Interactable
-    // rewardRoom.RerollButtonPressed
-    // shopRoom.Shop.RerollShopContent
-    | [<Action("reroll_rewards", "Reroll the rewards for %d coins")>] RerollRewards
+    | [<Action("heal", "Purchase a full heal")>] BuyHeal
+    | [<Action("reroll_shop", "Reroll the shop contents")>] RerollShop
+    | [<Action("reroll_rewards", "Reroll the rewards")>] RerollRewards
     // available: when !rewardRoom.Reward.InProgress && !rewardRoom.Busy
     //            when rewardRoom.skipButton.Interactable
     // rewardRoom.SkipButtonPressed
     | [<Action("skip_rewards", "Skip the rewards")>] SkipRewards
+    | [<Action("continue", "Exit the shop and move on")>] Continue
     // campRoom.HeroSelection   .StartingDeckSelection   .RerollDeck
     // IS ON A DELAY of openDelay
     | [<Action("select_hero",
@@ -254,8 +246,6 @@ type TileContext =
       attackEffect: EffectContext option
       [<SkipSerializingIfNone>]
       tileEffect: EffectContext option
-      [<SkipSerializingIfNone>]
-      buyPrice: ShopPrice option
       [<SkipSerializingIfNone>]
       unlockPrice: ShopPrice option
       [<SkipSerializingIfNone>]
@@ -370,6 +360,8 @@ type EnemyContext =
       cursed: bool
       [<SkipSerializingIfEquals false>]
       boss: bool
+      [<SkipSerializingIfEquals false>]
+      confusionResistance: bool
       [<SkipSerializingIfEquals false>]
       iceResistance: bool
       [<SkipSerializingIfEquals false>]
@@ -508,7 +500,6 @@ module Context =
           description = stripTags tile.Attack.Description
           attackEffect = attackEffect tile.Attack.AttackEffect
           tileEffect = tileEffect tile.Attack.TileEffect
-          buyPrice = None
           unlockPrice = None
           cooldownCharge = Some $"{tile.CooldownCharge}/{tile.Attack.Cooldown}"
           inAttackQueue =
@@ -523,8 +514,8 @@ module Context =
                 None }
 
     let skill (skill: Skill) : SkillContext =
-        { name = skill.Name
-          description = skill.Description
+        { name = stripTags skill.Name
+          description = stripTags skill.Description
           level = $"{skill.Level}/{skill.MaxLevel}"
           buyPrice = None
           unlockPrice = None }
@@ -574,6 +565,7 @@ module Context =
             | _ -> Intention.Wait
           boss = enemy :? Boss
           attackQueue = enemy.AttackQueue.TCC.Tiles |> Seq.map (tile false None) |> List.ofSeq
+          confusionResistance = enemy :? CorruptedSoulBoss
           iceResistance = not enemy.Freezable
           pushResistance = not enemy.Movable
           hp = hp enemy.AgentStats
@@ -696,23 +688,54 @@ module Context =
         | ShopStuff.CurrencyEnum.maxHP -> { ret with maxHp = price.Value }
         | _ -> ret
 
-    let shop (shop: Shop) : ShopContext =
+    let shopUis (shop: Shop) : ShopItemUI list =
+        typeof<Shop>
+            .GetField("shopItemUIs", BindingFlags.NonPublic ||| BindingFlags.Instance)
+            .GetValue(shop)
+        :?> Generic.List<ShopItemUI>
+        // public property that returns Interactable && !Interactable which is just what i need
+        |> Seq.filter _.InfoBoxEnabled
+        |> List.ofSeq
+
+    let skillShopData (item: SkillShopItemData) =
+        typeof<SkillShopItemData>
+            .GetField("skill", BindingFlags.NonPublic ||| BindingFlags.Instance)
+            .GetValue(item)
+        :?> Skill
+
+    let unlockSkillShopData (item: UnlockSkillShopItem) =
+        typeof<UnlockSkillShopItem>
+            .GetField("item", BindingFlags.NonPublic ||| BindingFlags.Instance)
+            .GetValue(item)
+        :?> Skill
+
+    let unlockTileShopData (item: UnlockTileShopItem) =
+        typeof<UnlockTileShopItem>
+            .GetField("tile", BindingFlags.NonPublic ||| BindingFlags.Instance)
+            .GetValue(item)
+        :?> Tile
+
+    let shopUpgradeName (item: ShopUpgradeShopItem) =
+        let key =
+            typeof<ShopUpgradeShopItem>
+                .GetField("SlotTypeLocalizationTableKey", BindingFlags.NonPublic ||| BindingFlags.Instance)
+                .GetValue(item)
+            :?> string
+
+        stripTags (Utils.LocalizationUtils.LocalizedString("Terms", key))
+
+
+    let shop (buyable: bool) (shop: Shop) : ShopContext =
         let name =
             typeof<Shop>
                 .GetProperty("Name", BindingFlags.NonPublic ||| BindingFlags.Instance)
                 .GetValue(shop)
             :?> string
 
-        let uis =
-            typeof<Shop>
-                .GetField("shopItemUIs", BindingFlags.NonPublic ||| BindingFlags.Instance)
-                .GetValue(shop)
-            :?> Generic.List<ShopItemUI>
-            |> List.ofSeq
+        let uis = shopUis shop
 
         uis
-        // public property that returns Interactable && !Interactable which is just what i need
-        |> List.filter _.InfoBoxEnabled
+        |> List.filter (fun x -> not buyable || x.price.CanAfford)
         |> List.fold
             (fun (ret: ShopContext) ui ->
                 match ui.shopItemData with
@@ -740,25 +763,17 @@ module Context =
                     // unknown service
                     | _ -> ret
                 | :? ShopUpgradeShopItem as item ->
-                    let key =
-                        typeof<ShopUpgradeShopItem>
-                            .GetField("SlotTypeLocalizationTableKey", BindingFlags.NonPublic ||| BindingFlags.Instance)
-                            .GetValue(item)
-                        :?> string
+                    let name = shopUpgradeName item
 
                     let item =
-                        { name = stripTags (Utils.LocalizationUtils.LocalizedString("Terms", key))
+                        { name = name
                           description = stripTags item.Description
                           unlockPrice = price ui.price }
 
                     { ret with
                         upgrades = Some(item :: Option.defaultValue List.empty ret.upgrades) }
                 | :? SkillShopItemData as item ->
-                    let item =
-                        typeof<SkillShopItemData>
-                            .GetField("skill", BindingFlags.NonPublic ||| BindingFlags.Instance)
-                            .GetValue(item)
-                        :?> Skill
+                    let item = skillShopData item
 
                     let item =
                         { skill item with
@@ -774,11 +789,7 @@ module Context =
                     { ret with
                         consumables = Some(item :: Option.defaultValue List.empty ret.consumables) }
                 | :? UnlockSkillShopItem as item ->
-                    let item =
-                        typeof<UnlockSkillShopItem>
-                            .GetField("item", BindingFlags.NonPublic ||| BindingFlags.Instance)
-                            .GetValue(item)
-                        :?> Skill
+                    let item = unlockSkillShopData item
 
                     let item =
                         { skill item with
@@ -787,11 +798,7 @@ module Context =
                     { ret with
                         skills = Some(item :: Option.defaultValue List.empty ret.skills) }
                 | :? UnlockTileShopItem as item ->
-                    let item =
-                        typeof<UnlockTileShopItem>
-                            .GetField("tile", BindingFlags.NonPublic ||| BindingFlags.Instance)
-                            .GetValue(item)
-                        :?> Tile
+                    let item = unlockTileShopData item
 
                     let item =
                         { tile false None item with
@@ -975,7 +982,8 @@ module Context =
                         None
 
                 let shop =
-                    cells.[0].youAreHereAndFacing |> Option.map (fun _ -> shop room.UnlocksShop)
+                    cells.[0].youAreHereAndFacing
+                    |> Option.map (fun _ -> shop false room.UnlocksShop)
 
                 shop, None, None, None, ngc
             | :? RewardRoom as room ->
@@ -984,7 +992,7 @@ module Context =
                 None, None, None, reward, None
             | :? ShopRoom as room ->
                 let reward = reward room.TileUpgradeReward
-                let shop = shop room.Shop
+                let shop = shop false room.Shop
                 None, reward, Some shop, None, None
             | _ -> None, None, None, None, None
 
@@ -1418,6 +1426,94 @@ type Game(plugin: MainClass) =
 
                         actions <- play :: actions
 
+            let fmtPrice (price: ShopPrice) : string =
+                match price with
+                | { coins = coins } when coins > 0 -> $"{coins} coins"
+                | { skulls = skulls } when skulls > 0 -> $"{skulls} skulls"
+                | { hp = hp } when hp > 0 -> $"{hp} HP"
+                | { maxHp = maxHp } when maxHp > 0 -> $"{maxHp} max HP"
+                | _ -> "free"
+
+            match CombatSceneManager.Instance.Room with
+            | :? CampRoom as room -> Some room.UnlocksShop
+            | :? ShopRoom as room -> Some room.Shop
+            | _ -> None
+            |> Option.iter (fun shop ->
+                let ctx = Context.shop true shop
+                shouldForce <- true
+
+                ctx.get10CoinsPrice
+                |> Option.iter (fun price ->
+                    let act = this.Action Buy10Coins
+                    act.Description <- act.InitialDescription + $" for {fmtPrice price}"
+                    actions <- act :: actions)
+
+                ctx.get5CoinsPrice
+                |> Option.iter (fun price ->
+                    let act = this.Action Buy5Coins
+                    act.Description <- act.InitialDescription + $" for {fmtPrice price}"
+                    actions <- act :: actions)
+
+                ctx.fullHealPrice
+                |> Option.iter (fun price ->
+                    let act = this.Action BuyHeal
+                    act.Description <- act.InitialDescription + $" for {fmtPrice price}"
+                    actions <- act :: actions)
+
+                ctx.rerollPrice
+                |> Option.iter (fun price ->
+                    let act = this.Action RerollShop
+                    act.Description <- act.InitialDescription + $" for {fmtPrice price}"
+                    actions <- act :: actions)
+
+                ctx.tiles
+                |> Option.iter (fun tiles ->
+                    let names = tiles |> Array.ofList |> Array.map _.name
+                    let act = this.Action UnlockTile
+                    act.MutateProp "tileName" (fun x -> (x :?> StringSchema).SetEnum(names))
+                    actions <- act :: actions)
+
+                ctx.upgrades
+                |> Option.iter (fun upgs ->
+                    let names = upgs |> Array.ofList |> Array.map _.name
+                    let act = this.Action UnlockShopUpgrade
+                    act.MutateProp "upgradeName" (fun x -> (x :?> StringSchema).SetEnum(names))
+                    actions <- act :: actions)
+
+                let chooseMap x y =
+                    Array.choose (fun z -> if Option.isSome (x z) then Some(y z) else None)
+
+                ctx.skills
+                |> Option.iter (fun skills ->
+                    let n1 = skills |> Array.ofList |> chooseMap _.unlockPrice _.name
+                    let n2 = skills |> Array.ofList |> chooseMap _.buyPrice _.name
+                    let act = this.Action UnlockSkill
+                    act.MutateProp "skillName" (fun x -> (x :?> StringSchema).SetEnum(n1))
+                    actions <- act :: actions
+                    let act = this.Action BuySkill
+                    act.MutateProp "skillName" (fun x -> (x :?> StringSchema).SetEnum(n2))
+                    actions <- act :: actions)
+
+                ctx.consumables
+                |> Option.iter (fun cs ->
+                    let n1 = cs |> Array.ofList |> chooseMap _.unlockPrice (_.name >> _.Value)
+                    let n2 = cs |> Array.ofList |> chooseMap _.buyPrice (_.name >> _.Value)
+                    let act = this.Action UnlockConsumable
+                    act.MutateProp "consumableName" (fun x -> (x :?> StringSchema).SetEnum(n1))
+                    actions <- act :: actions
+                    let act = this.Action BuyConsumable
+                    act.MutateProp "consumableName" (fun x -> (x :?> StringSchema).SetEnum(n2))
+                    actions <- act :: actions))
+
+            let potions =
+                PotionsManager.Instance.HeldPotions
+                |> Array.filter _.CanBeUsed
+                |> Array.map _.Name
+
+            let usePotion = this.Action Consume
+            usePotion.MutateProp "itemName" (fun x -> (x :?> StringSchema).SetEnum(potions))
+            actions <- usePotion :: actions
+
             let actions = actions |> List.filter _.Valid
 
             this.RetainActions(actions |> List.map (fun x -> x))
@@ -1441,7 +1537,57 @@ type Game(plugin: MainClass) =
 
     override _.Name = "test"
 
-    override _.HandleAction(action: Actions) =
+    override this.HandleAction(action: Actions) =
+        let copyPrice (price: Price) : (ShopStuff.CurrencyEnum * int) = (price.Currency, price.Value)
+
+        let fmtPrice'' (infix: string) (price: (ShopStuff.CurrencyEnum * int)) : string =
+            let value = snd price
+
+            match fst price with
+            | ShopStuff.CurrencyEnum.coins -> $"{value} coins, you{infix} have {Globals.Coins} coins"
+            | ShopStuff.CurrencyEnum.meta -> $"{value} skulls, you{infix} have {Globals.KillCount} skulls"
+            | ShopStuff.CurrencyEnum.hp -> $"{value} HP, you{infix} have {Globals.Hero.AgentStats.HP} HP"
+            | ShopStuff.CurrencyEnum.maxHP -> $"{value} max HP, you{infix} have {Globals.Hero.AgentStats.maxHP} max HP"
+            | _ -> $"{value} ???"
+
+        let fmtPrice' = fmtPrice'' " now"
+        let fmtPrice = copyPrice >> fmtPrice'' ""
+
+        let finalizePurchase (name: string) (x: Result<ShopItemUI list, string option>) =
+            x
+            |> Result.bind (fun thisItem ->
+                let toBuy = thisItem |> List.tryFind _.price.CanAfford
+
+                match toBuy with
+                | Some ui ->
+                    let price = copyPrice ui.price
+                    ui.Submit()
+                    Ok(Some $"Bought {name} for {fmtPrice' price}")
+                | None ->
+                    Error(Some $"This {name} is too expensive - it costs {(List.head thisItem).price |> fmtPrice}!"))
+
+        let findService ty =
+            Result.bind (fun shop ->
+                let items =
+                    Context.shopUis shop
+                    |> List.choose (fun ui ->
+                        match ui.shopItemData with
+                        | :? ServiceShopItem as item -> Some(ui, item)
+                        | _ -> None)
+
+                let thisItem = items |> List.filter (snd >> _.shopServiceEnum >> (=) ty)
+
+                if List.isEmpty thisItem then
+                    Error(Some "You can't do that in this shop")
+                else
+                    Ok(List.map fst thisItem))
+
+        let shop =
+            match CombatSceneManager.Instance.Room with
+            | :? CampRoom as room -> Ok room.UnlocksShop
+            | :? ShopRoom as room -> Ok room.Shop
+            | _ -> Error(Some "There's no shop in this room!")
+
         match action with
         | CheatQuick ->
             Globals.DeveloperUtils.Quick <- not Globals.DeveloperUtils.Quick
@@ -1661,7 +1807,7 @@ type Game(plugin: MainClass) =
                             None
                         else
                             Some(
-                                $"Tiles that you haven't listed were removed from the attack queue: {List.map fst toRemove}. Note that adding tiles to the queue costs turns, so unplayed tiles are usually wasted turns"
+                                $"Tiles that you haven't listed were removed from the attack queue: {List.map fst toRemove |> this.Serialize}. Note that adding tiles to the queue costs turns, so unplayed tiles are usually wasted turns"
                             )
 
                     context))
@@ -1691,24 +1837,220 @@ type Game(plugin: MainClass) =
                 tile.TileContainer.UponTileSubmit()
                 None)
 
-        | Consume _itemName -> Error(None)
-        | BuyConsumable _consumableName -> Error(None)
-        | BuySkill _skillName -> Error(None)
-        | UnlockShopUpgrade _shopUpgradeName -> Error(None)
-        | UnlockConsumable _consumableName -> Error(None)
-        | UnlockSkill _skillName -> Error(None)
+        | Consume itemName ->
+            let room = CombatSceneManager.Instance.Room
+
+            match
+                PotionsManager.Instance.HeldPotions
+                |> Array.filter (_.AlreadyUsed >> not)
+                |> Array.tryFind (_.Name >> Context.stripTags >> (=) itemName)
+            with
+            | Some potion when potion.CanBeUsed ->
+                let hadShield = Globals.Hero.AgentStats.shield
+                let prevHp = Context.hp Globals.Hero.AgentStats
+                potion.Submit()
+
+                match potion with
+                | :? D6Potion ->
+                    match room with
+                    | :? CombatRoom -> "Confusing all enemies..."
+                    | :? RewardRoom -> "Rerolling the reward..."
+                    | :? ShopRoom -> "Rerolling the shop content..."
+                    | _ -> "???"
+                | :? FreezeTimePotion ->
+                    $"Freezing every enemy for {Parameters.GameParams.iceEffectTurnsDuration} turns..."
+                | :? HealSmallPotion ->
+                    let curHp = Context.hp Globals.Hero.AgentStats
+                    $"Healed from {prevHp} to {curHp}"
+                | :? MassCursePotion -> "Cursing every enemy, doubling their next taken damage"
+                | :? PoisonPotion ->
+                    $"Poisoning every enemy for {Parameters.GameParams.poisonEffectTurnsDuration} turns, they will take 1 damage each turn"
+                | :? RainOfMirrorsPotion -> "Mirroring every enemy and their intentions..."
+                | :? ShieldPotion ->
+                    if hadShield then
+                        "You already had a shield, so the potion did nothing, whoops..."
+                    else
+                        "Added a shield, completely nullifying your next damage taken"
+                | :? CoolUpPotion -> "Recharged all cooldowns"
+                | _ -> "Potion used"
+                |> (Some >> Ok)
+            | Some _ ->
+                if CombatManager.Instance.CombatInProgress && CombatManager.Instance.TurnInProgress then
+                    "Please wait for your turn first"
+                else
+                    "This consumable can't be used in this location"
+                |> (Some >> Error)
+            | None ->
+                $"This consumable doesn't exist, existing consumables: {PotionsManager.Instance.HeldPotions
+                                                                        |> Array.map (_.Name >> Context.stripTags)
+                                                                        |> List.ofArray
+                                                                        |> this.Serialize}"
+                |> (Some >> Error)
+        | BuyConsumable consumableName ->
+            shop
+            |> Result.bind (fun shop ->
+                let items =
+                    Context.shopUis shop
+                    |> List.choose (fun ui ->
+                        match ui.shopItemData with
+                        | :? ConsumableShopItem as item -> Some(ui, item)
+                        | _ -> None)
+
+                let thisItem =
+                    items
+                    |> List.filter (snd >> _.potionPickupPrefab.PotionPrefab.Name >> stripTags >> (=) consumableName)
+
+                if List.isEmpty thisItem then
+                    let names =
+                        items
+                        |> List.map (snd >> _.potionPickupPrefab.PotionPrefab.Name >> stripTags)
+                        |> this.Serialize
+
+                    Error(Some $"Consumable with this name was not found in the shop, available consumables: {names}")
+                else
+                    Ok(List.map fst thisItem))
+            |> finalizePurchase "consumable"
+        | BuySkill skillName ->
+            shop
+            |> Result.bind (fun shop ->
+                let items =
+                    Context.shopUis shop
+                    |> List.choose (fun ui ->
+                        match ui.shopItemData with
+                        | :? SkillShopItemData as item -> Some(ui, item)
+                        | _ -> None)
+
+                let thisItem =
+                    items
+                    |> List.filter (snd >> Context.skillShopData >> _.Name >> stripTags >> (=) skillName)
+
+                if List.isEmpty thisItem then
+                    let names =
+                        items
+                        |> List.map (snd >> Context.skillShopData >> _.Name >> stripTags)
+                        |> this.Serialize
+
+                    Error(Some $"Skill with this name was not found in the shop, available skills: {names}")
+                else
+                    Ok(List.map fst thisItem))
+            |> finalizePurchase "skill"
+        | UnlockShopUpgrade shopUpgradeName ->
+            shop
+            |> Result.bind (fun shop ->
+                let items =
+                    Context.shopUis shop
+                    |> List.choose (fun ui ->
+                        match ui.shopItemData with
+                        | :? ShopUpgradeShopItem as item -> Some(ui, item)
+                        | _ -> None)
+
+                let thisItem =
+                    items |> List.filter (snd >> Context.shopUpgradeName >> (=) shopUpgradeName)
+
+                if List.isEmpty thisItem then
+                    let names = items |> List.map (snd >> Context.shopUpgradeName) |> this.Serialize
+
+                    Error(Some $"Shop upgrade with this name was not found in the shop, available upgrades: {names}")
+                else
+                    Ok(List.map fst thisItem))
+            |> finalizePurchase "shop upgrade"
+        | UnlockConsumable consumableName ->
+            shop
+            |> Result.bind (fun shop ->
+                let items =
+                    Context.shopUis shop
+                    |> List.choose (fun ui ->
+                        match ui.shopItemData with
+                        | :? UnlockConsumableShopItem as item -> Some(ui, item)
+                        | _ -> None)
+
+                let thisItem =
+                    items
+                    |> List.filter (snd >> _.potionPickupPrefab.PotionPrefab.Name >> stripTags >> (=) consumableName)
+
+                if List.isEmpty thisItem then
+                    let names =
+                        items
+                        |> List.map (snd >> _.potionPickupPrefab.PotionPrefab.Name >> stripTags)
+                        |> this.Serialize
+
+                    Error(Some $"Consumable with this name was not found in the shop, available consumables: {names}")
+                else
+                    Ok(List.map fst thisItem))
+            |> finalizePurchase "consumable"
+        | UnlockSkill skillName ->
+            shop
+            |> Result.bind (fun shop ->
+                let items =
+                    Context.shopUis shop
+                    |> List.choose (fun ui ->
+                        match ui.shopItemData with
+                        | :? UnlockSkillShopItem as item -> Some(ui, item)
+                        | _ -> None)
+
+                let thisItem =
+                    items
+                    |> List.filter (snd >> Context.unlockSkillShopData >> _.Name >> stripTags >> (=) skillName)
+
+                if List.isEmpty thisItem then
+                    let names =
+                        items
+                        |> List.map (snd >> Context.unlockSkillShopData >> _.Name >> stripTags)
+                        |> this.Serialize
+
+                    Error(Some $"Skill with this name was not found in the shop, available skills: {names}")
+                else
+                    Ok(List.map fst thisItem))
+            |> finalizePurchase "skill"
+        | UnlockTile tileName ->
+            shop
+            |> Result.bind (fun shop ->
+                let items =
+                    Context.shopUis shop
+                    |> List.choose (fun ui ->
+                        match ui.shopItemData with
+                        | :? UnlockTileShopItem as item -> Some(ui, item)
+                        | _ -> None)
+
+                let thisItem =
+                    items
+                    |> List.filter (snd >> Context.unlockTileShopData >> _.Attack.Name >> stripTags >> (=) tileName)
+
+                if List.isEmpty thisItem then
+                    let names =
+                        items
+                        |> List.map (snd >> Context.unlockTileShopData >> _.Attack.Name >> stripTags)
+                        |> this.Serialize
+
+                    Error(Some $"Tile with this name was not found in the shop, available tiles: {names}")
+                else
+                    Ok(List.map fst thisItem))
+            |> finalizePurchase "tile"
+        | RerollShop ->
+            shop
+            |> findService ShopStuff.ShopServiceEnum.reroll
+            |> finalizePurchase "shop reroll"
+        | BuyHeal ->
+            shop
+            |> findService ShopStuff.ShopServiceEnum.heal
+            |> finalizePurchase "full heal"
+        | Buy5Coins ->
+            shop
+            |> findService ShopStuff.ShopServiceEnum.get5Coins
+            |> finalizePurchase "5 coins"
+        | Buy10Coins ->
+            shop
+            |> findService ShopStuff.ShopServiceEnum.get10Coins
+            |> finalizePurchase "10 coins"
         | SellConsumable _consumableName -> Error(None)
-        | AddAttackEffect _tileName -> Error(None)
-        | AddTileEffect _tileName -> Error(None)
-        | UpgradeTile _tileName -> Error(None)
+        | ApplyUpgrade _tileName -> Error(None)
         | RerollTile _tileName -> Error(None)
         | PickTileReward _tileName -> Error(None)
         | SacrificeTile _tileName -> Error(None)
         // services
-        | RerollRewards -> Error(None)
-        | Heal -> Error(None)
-        | BuyCoins -> Error(None)
+        | Continue -> Error(None)
         // skip
+        | RerollRewards -> Error(None)
         | SkipRewards -> Error(None)
         | SelectHero(_heroName, _altDeck, _day) -> Error(None)
         | ChoosePath _pathIndex -> Error(None)
