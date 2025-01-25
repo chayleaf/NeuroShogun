@@ -937,7 +937,7 @@ type Game<'T>() =
         | _ -> raise (Exception("invalid actions type, must be a union"))
 
     let actMap =
-        fst acts |> Array.map (fun (case, act) -> (case.info.Name, act)) |> Map.ofArray
+        fst acts |> Array.map (fun (_, act) -> (act.Name, act)) |> Map.ofArray
 
     let tagMap =
         fst acts |> Array.map (fun (case, act) -> (case.info.Tag, act)) |> Map.ofArray
@@ -1018,6 +1018,8 @@ type Game<'T>() =
         let serverCmdTy = TypeInfo.fromSystemType typeof<ServerCommand>
         let gameName = this.Name
 
+        let log (err: string) = this.LogError(err)
+
         let proc (cmd: ServerCommand) =
             match cmd with
             | Action data ->
@@ -1046,6 +1048,7 @@ type Game<'T>() =
                                 Error(Some $"Unknown action name: {name}, expected one of: \"{names}\"")
                             | Error(err) -> Error(Some $"Invalid action data: {err}")
                         with exc ->
+                            log $"{exc}"
                             Error(Some $"Unhandled exception: {exc.Message}"))
 
                 mp.Value.Post(
@@ -1058,8 +1061,6 @@ type Game<'T>() =
                         )
                     )
                 )
-
-        let log (err: string) = this.LogError(err)
 
         task {
             let clientCmdTy = TypeInfo.fromSystemType typeof<ClientCommand>
