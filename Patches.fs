@@ -87,6 +87,11 @@ type public Patches() =
     static member DioramaLine(text: string) =
         MainClass.Instance.Game.ShowDioramaDialogue text
 
+    [<HarmonyPatch(typeof<Agent>, nameof Unchecked.defaultof<Agent>.ShowDialogue)>]
+    [<HarmonyPrefix>]
+    static member ShowDialogue(__instance: Agent, text: string) =
+        MainClass.Instance.Game.ShowDialogue __instance text
+
     [<HarmonyPatch(typeof<ScrollingCredits>, "Start")>]
     [<HarmonyPrefix>]
     static member CreditsStart() = MainClass.Instance.Game.CreditsStart()
@@ -120,7 +125,7 @@ type public Patches() =
     [<HarmonyPatch(typeof<NobunagaBoss>, "AddVulnerableCells")>]
     [<HarmonyPostfix>]
     static member NobunagaAttacked(___vulnerableCells: Generic.List<Cell>) =
-        MainClass.Instance.Game.NobunagaCells(___vulnerableCells |> List.ofSeq)
+        MainClass.Instance.Game.NobunagaCells <- ___vulnerableCells |> List.ofSeq
 
     [<HarmonyPatch(typeof<NobunagaBoss>, nameof Unchecked.defaultof<NobunagaBoss>.ReceiveAttack)>]
     [<HarmonyPrefix>]
@@ -204,10 +209,6 @@ type public Patches() =
     static member WaveSpawn(__instance: Wave) =
         MainClass.Instance.Game.WaveSpawned __instance
 
-    [<HarmonyPatch(typeof<BossRoom>, nameof Unchecked.defaultof<BossRoom>.End)>]
-    [<HarmonyPostfix>]
-    static member BossRoomEnd() = MainClass.Instance.Game.BossRoomEnd()
-
     [<HarmonyPatch(typeof<Skill>, "InvokeSkillTriggeredEvent")>]
     [<HarmonyPostfix>]
     static member SkillTriggered(__instance: Skill) =
@@ -217,3 +218,57 @@ type public Patches() =
     [<HarmonyPostfix>]
     static member GameOverSeq(__instance: GameOverScreen, __result: IEnumerator byref) =
         __result <- EnumeratorWrapper(__result, ignore, (fun () -> __instance.Continue()))
+
+    [<HarmonyPatch(typeof<ThornsEnemy>, nameof Unchecked.defaultof<ThornsEnemy>.ReceiveAttack)>]
+    [<HarmonyPostfix>]
+    static member ThornsAttackRec() =
+        MainClass.Instance.Game.NullAttackReason <- "thorns"
+
+    [<HarmonyPatch(typeof<Agent>, "ProcessPoisonStatus")>]
+    [<HarmonyPostfix>]
+    static member ProcessPoisonStatus() =
+        MainClass.Instance.Game.NullAttackReason <- "poison"
+
+    [<HarmonyPatch(typeof<Trap>, "OnTriggerEnter2D")>]
+    [<HarmonyPostfix>]
+    static member TrapTriggerEnter() =
+        MainClass.Instance.Game.NullAttackReason <- "a trap"
+
+    [<HarmonyPatch(typeof<ShockwaveEffect>, nameof Unchecked.defaultof<ShockwaveEffect>.Initialize)>]
+    [<HarmonyPostfix>]
+    static member ShockwaveInit() =
+        MainClass.Instance.Game.NullAttackReason <- "a shockwave"
+
+    [<HarmonyPatch(typeof<KarmaSkill>, "OnHeroIsHit")>]
+    [<HarmonyPostfix>]
+    static member KarmaHit() =
+        MainClass.Instance.Game.NullAttackReason <- "karma"
+
+    [<HarmonyPatch(typeof<CorruptionAttackCombatTask>, "AddWarningToCells")>]
+    [<HarmonyPostfix>]
+    static member AddCorruptedWarnings(cells: Generic.List<Cell>) =
+        MainClass.Instance.Game.CorruptedCells <- cells |> List.ofSeq
+
+    [<HarmonyPatch(typeof<CorruptionAttackCombatTask>, "DestroyCellWarning")>]
+    [<HarmonyPostfix>]
+    static member RemoveCorruptedWarnings() =
+        MainClass.Instance.Game.CorruptedCells <- []
+
+    [<HarmonyPatch(typeof<Bomb>, nameof Unchecked.defaultof<Bomb>.Initialize)>]
+    [<HarmonyPostfix>]
+    static member BombInit(__instance: Bomb) =
+        MainClass.Instance.Game.BombPlaced __instance
+
+    [<HarmonyPatch(typeof<Bomb>, "Explode")>]
+    [<HarmonyPostfix>]
+    static member BombGone(__instance: Bomb) =
+        MainClass.Instance.Game.BombGone __instance
+
+    [<HarmonyPatch(typeof<MakuEffect>, nameof Unchecked.defaultof<MakuEffect>.CurtainDown)>]
+    [<HarmonyPostfix>]
+    static member CurtainDown(title: string) =
+        MainClass.Instance.Game.CurtainDown title
+
+    [<HarmonyPatch(typeof<MakuEffect>, "CurtainUp")>]
+    [<HarmonyPostfix>]
+    static member CurtainUp() = MainClass.Instance.Game.CurtainUp()

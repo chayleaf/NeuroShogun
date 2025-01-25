@@ -381,15 +381,25 @@ type EnemyContext =
       [<SkipSerializingIfEquals false>]
       pushResistance: bool }
 
+type CellState =
+    { nobunaga: Cell list
+      corrupted: Cell list
+      traps: (Cell * Trap) list
+      bombs: (Cell * Bomb) list }
+
 type CellContext =
     { xPos: int
       // nobunaga
       [<SkipSerializingIfNone>]
       spotlight: bool option
       [<SkipSerializingIfNone>]
+      warnings: string list option
+      [<SkipSerializingIfNone>]
+      entity: EnemyContext option
+      [<SkipSerializingIfNone>]
       enemy: EnemyContext option
       [<SkipSerializingIfEquals 0>]
-      traps: int
+      trapsForEnemies: int
       // corrupted soul
       [<SkipSerializingIfNone>]
       flyingEnemy: EnemyContext option
@@ -606,7 +616,7 @@ module Context =
           remainingPoisonedDuration = enemy.AgentStats.poison
           cursed = enemy.AgentStats.curse }
 
-    let cell (nobunaga: Cell list) (traps: (Cell * Trap) list) (cell: Cell) : CellContext =
+    let cell (state: CellState) (cell: Cell) : CellContext =
         let flying =
             match CombatSceneManager.Instance.Room with
             | :? CorruptedSoulBossRoom as room when room.Boss <> null ->
@@ -618,20 +628,49 @@ module Context =
                     None
             | _ -> None
 
-        let enemy, you =
+        let enemy, entity, you =
             match cell.Agent with
-            | null -> None, None
-            | :? Hero as hero -> None, Some(Dir.ofGame hero.FacingDir)
-            | x -> Some(enemy (x :?> Enemy)), None
+            | null -> None, None, None
+            | :? Hero as hero -> None, None, Some(Dir.ofGame hero.FacingDir)
+            | :? ThornsEnemy
+            | :? DummyEnemy
+            | :? BarricadeEnemy -> None, Some(enemy (cell.Agent :?> Enemy)), None
+            | x -> Some(enemy (x :?> Enemy)), None, None
 
         { xPos = cell.IndexInGrid
           spotlight =
-            if List.isEmpty nobunaga then
+            if List.isEmpty state.nobunaga then
                 None
             else
-                Some(List.contains cell nobunaga)
+                Some(List.contains cell state.nobunaga)
+          warnings =
+            let warnings =
+                []
+                @ (if List.contains cell state.corrupted then
+                       [ "Corruption strikes this cell on the next turn (damages units, heals bosses)" ]
+                   else
+                       [])
+                @ (let bombs =
+                    state.bombs
+                    |> List.filter (fst >> (=) cell)
+                    |> List.map (fun (_, bomb) ->
+                        typeof<Bomb>
+                            .GetField("nTurnsLeft", BindingFlags.NonPublic ||| BindingFlags.Instance)
+                            .GetValue(bomb)
+                        :?> int
+                        + 1)
+                    |> List.filter ((>) 0)
+                    |> List.sort
+
+                   match bombs with
+                   | [] -> []
+                   | [ bomb ] -> [ $"Bomb strikes this cell in {bomb} turns" ]
+                   | _ -> [ $"{List.length bombs} bombs hit this cell in {List.last bombs} turns" ])
+
+            if List.isEmpty warnings then None else Some warnings
+          entity = entity
           enemy = enemy
-          traps = traps |> List.filter (fst >> (=) cell) |> List.fold (fun n _ -> n + 1) 0
+          trapsForEnemies = state.traps |> List.filter (fst >> (=) cell) |> List.fold (fun n _ -> n + 1) 0
           // corrupted soul
           flyingEnemy = flying
           youAreHereAndFacing = you
@@ -1018,11 +1057,10 @@ module Context =
         else
             None
 
-    let context (nobunaga: Cell list) (traps: (Cell * Trap) list) : Context =
+    let context (state: CellState) : Context =
         let room = CombatSceneManager.Instance.Room
 
-        let mutable cells =
-            room.Grid.Cells |> Array.map (cell nobunaga traps) |> List.ofArray
+        let mutable cells = room.Grid.Cells |> Array.map (cell state) |> List.ofArray
 
         let shop, shop1, shop2, reward, ngc =
             match room with
@@ -1119,11 +1157,16 @@ type Game(plugin: MainClass) =
 
     let mutable initDone = false
     let mutable nobunagaCells = List.empty
+    let mutable corruptedCells = List.empty
     let mutable trapCells = List.empty
+    let mutable bombCells = List.empty
     let mutable trapCell = null
     let mutable skipDioramaTime = None
     let mutable isForce = false
     let mutable forceNames = None
+
+    let mutable nullAttackReason =
+        "poison/thorns/trap/shockwave/karma (figure it out yourself)"
 
     member this.InhibitForces
         with set value =
@@ -1146,24 +1189,59 @@ type Game(plugin: MainClass) =
     member _.TrapAttack(agent: Agent) =
         trapCell <- agent.Cell.Neighbour(agent.FacingDir, 1)
 
-    member _.NobunagaCells(cells: Cell list) = nobunagaCells <- cells
+    member _.BombPlaced(bomb: Bomb) =
+        let cell =
+            typeof<Bomb>
+                .GetField("cell", BindingFlags.NonPublic ||| BindingFlags.Instance)
+                .GetValue(bomb)
+            :?> Cell
+
+        bombCells <- (cell, bomb) :: bombCells
+        let left = cell.Neighbour(Utils.Dir.Left, 1)
+        let right = cell.Neighbour(Utils.Dir.Left, 1)
+
+        if left <> null then
+            bombCells <- (left, bomb) :: bombCells
+
+        if right <> null then
+            bombCells <- (right, bomb) :: bombCells
+
+    member _.BombGone(bomb: Bomb) =
+        bombCells <- bombCells |> List.filter (snd >> (<>) bomb)
+
+    member _.NobunagaCells
+        with set cells = nobunagaCells <- cells
+
+    member _.CorruptedCells
+        with set value = corruptedCells <- value
 
     member this.PerformForce(names: string list) =
-        if inhibitForces = 0 && not (List.isEmpty names) then
-            let ctx = Context.context nobunagaCells trapCells
+        try
+            if inhibitForces = 0 && not (List.isEmpty names) then
+                let ctx =
+                    Context.context
+                        { nobunaga = nobunagaCells
+                          traps = trapCells
+                          bombs = bombCells
+                          corrupted = corruptedCells }
 
-            isForce <- true
+                isForce <- true
 
-            this.Force(
-                { state = Some(this.Serialize(ctx))
-                  ephemeral_context = true
-                  query =
-                    match CombatSceneManager.Instance.CurrentMode with
-                    | CombatSceneManager.Mode.mapSelection -> "Please pick your next destination"
-                    | CombatSceneManager.Mode.reward -> "Please pick your rewards"
-                    | _ -> "Please pick your next action"
-                  action_names = names }
-            )
+                this.Force(
+                    { state = Some(this.Serialize(ctx))
+                      ephemeral_context = true
+                      query =
+                        match CombatSceneManager.Instance.CurrentMode with
+                        | CombatSceneManager.Mode.mapSelection -> "Please pick your next destination"
+                        | CombatSceneManager.Mode.reward -> "Please pick your rewards"
+                        | _ -> "Please pick your next action"
+                      action_names = names }
+                )
+        with _ ->
+            ()
+
+    member _.NullAttackReason
+        with set value = nullAttackReason <- value
 
     member this.ReceiveAttack(agent: Agent, hit: Hit, attacker: Agent) =
         let atkName =
@@ -1171,7 +1249,7 @@ type Game(plugin: MainClass) =
             | :? Hero ->
                 hit.Damage <- hit.Damage * 100
                 "you"
-            | null -> "poison/thorns/trap/shockwave/karma (figure it out yourself)"
+            | null -> nullAttackReason
             | _ -> attacker.Name
 
         let effects =
@@ -1195,13 +1273,18 @@ type Game(plugin: MainClass) =
                match dmg with
                | 0 -> ""
                | x when x < agent.AgentStats.HP -> $" HP: {agent.AgentStats.HP}->{agent.AgentStats.HP - x}"
-               | _ -> " The hit is lethal.")
+               | _ ->
+                   if atkName = "you" && CombatManager.Instance.KillStreak > 0 then
+                       $" The hit is lethal ({CombatManager.Instance.KillStreak + 1} combo)."
+                   else
+                       " The hit is lethal.")
 
         match agent with
         | :? Hero -> $"You have been hit by {atkName} for {hit.Damage} damage.{effects}"
         | :? NobunagaBoss when nobunagaCells |> List.exists ((=) agent.Cell) |> not ->
             $"{agent.Name} got hit by {atkName}, but the attack didn't seem to have any effect..."
-        | _ -> $"{agent.Name} has been hit by {atkName}.{effects}"
+        | :? Boss -> $"{agent.Name} has been hit by {atkName}.{effects}"
+        | _ -> $"A {agent.Name} has been hit by {atkName}.{effects}"
         |> this.Context false
 
     member this.ShowShopkeeperDialogue(text: string) =
@@ -1212,8 +1295,16 @@ type Game(plugin: MainClass) =
 
     member this.ShowDialogue (agent: Agent) (text: string) =
         match agent with
-        | :? Hero -> this.Context false $"You, {stripTags Globals.Hero.Name}, say: {stripTags text}"
-        | _ -> this.Context false $"The enemy {stripTags agent.Name} says: {stripTags text}"
+        | :? Hero -> $"You, {stripTags Globals.Hero.Name}, say: {stripTags text}"
+        | :? Boss -> $"{stripTags agent.Name} says: {stripTags text}"
+        | _ -> $"A {stripTags agent.Name} says: {stripTags text}"
+        |> (this.Context false)
+
+    member this.CurtainDown(title: string) =
+        this.Context false $"The curtains have been pulled down {stripTags title}"
+
+    member this.CurtainUp() =
+        this.Context false $"The curtains are rising. The next act unfolds."
 
     member this.CreditsStart() =
         this.Context
@@ -1290,6 +1381,8 @@ type Game(plugin: MainClass) =
     member this.ExitRoom(room: Room) =
         nobunagaCells <- List.empty
         trapCells <- List.empty
+        corruptedCells <- List.empty
+        bombCells <- List.empty
         let win = CombatSceneManager.Instance.progression.IsLastLevel
 
         if win then
@@ -1322,9 +1415,6 @@ type Game(plugin: MainClass) =
 
     member this.WaveSpawned(wave: Wave) =
         this.Context false $"A new wave of {wave.NEnemies} enemies has spawned!"
-
-    member this.BossRoomEnd() =
-        this.Context false $"You have defeated the boss!"
 
     member this.SkillTriggered(skill: Skill) =
         this.Context false $"The skill {stripTags skill.Name} has been triggered!"
