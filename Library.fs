@@ -372,6 +372,8 @@ type EnemyContext =
       [<SkipSerializingIfEquals false>]
       boss: bool
       [<SkipSerializingIfEquals false>]
+      onlyVulnerableInSpotlight: bool
+      [<SkipSerializingIfEquals false>]
       confusionResistance: bool
       [<SkipSerializingIfEquals false>]
       iceResistance: bool
@@ -576,6 +578,7 @@ module Context =
             | CombatEnums.ActionEnum.FlipRight -> Intention.TurnRight
             | _ -> Intention.Wait
           boss = enemy :? Boss
+          onlyVulnerableInSpotlight = enemy :? NobunagaBoss
           attackQueue = enemy.AttackQueue.TCC.Tiles |> Seq.map (tile false None) |> List.ofSeq
           confusionResistance = enemy :? CorruptedSoulBoss
           iceResistance = not enemy.Freezable
@@ -1325,10 +1328,8 @@ type Game(plugin: MainClass) =
                 if room.BannerTextEnd <> "" && not (room :? CampRoom) then
                     ctx $"Fight result: {room.BannerTextEnd}")
 
-            // man.MapOpened.AddListener(fun () -> ())
-            // man.MapCurrentLocationCleared.AddListener(fun () -> ())
-            man.RewardBusy.AddListener(fun () -> inhibitForces <- inhibitForces + 1)
-            man.RewardReady.AddListener(fun () -> inhibitForces <- inhibitForces - 1)
+        // man.MapOpened.AddListener(fun () -> this.InhibitForces <- false)
+        // man.MapCurrentLocationCleared.AddListener(fun () -> this.InhibitForces <- false)
 
         this.ReregisterActions' false
 
@@ -1396,8 +1397,8 @@ type Game(plugin: MainClass) =
                 && not CombatManager.Instance.TurnInProgress
                 && CombatManager.Instance.AllowHeroAction
                 && not lock
+                && CombatSceneManager.Instance.CurrentMode = CombatSceneManager.Mode.combat
             then
-
                 if Globals.Hero.AllowWait then
                     actions <- this.Action Wait :: actions
                     shouldForce <- true
@@ -1520,6 +1521,7 @@ type Game(plugin: MainClass) =
                         Some room.UnlocksShop, None
                     else
                         None, None
+                | _ when CombatSceneManager.Instance.CurrentMode <> CombatSceneManager.Mode.reward -> None, None
                 | :? RewardRoom as room ->
                     if room.Reward.InProgress && room.skipButton.Interactable then
                         let act = this.Action SkipRewards
@@ -1529,11 +1531,10 @@ type Game(plugin: MainClass) =
                         let act = this.Action RerollRewards
                         actions <- act :: actions
 
-                    if room.Busy then
+                    if room.Busy || room.Reward = null then
                         None, None
                     else
-                        shouldForce <- true
-                        None, Some room.Reward
+                        None, Some(room.Reward, true)
                 | :? ShopRoom as room ->
                     let goBtn =
                         typeof<ShopRoom>
@@ -1545,26 +1546,44 @@ type Game(plugin: MainClass) =
                         let act = this.Action Continue
                         actions <- act :: actions
 
-                    Some room.Shop, Some room.TileUpgradeReward
+                    let reward =
+                        if room.TileUpgradeReward = null then
+                            None
+                        else
+                            let upgrade =
+                                typeof<ShopRoom>
+                                    .GetField("tileUpgradeInShop", BindingFlags.NonPublic ||| BindingFlags.Instance)
+                                    .GetValue(room)
+                                :?> TileUpgradeInShop
+
+                            if upgrade.price.CanAfford then
+                                Some(room.TileUpgradeReward :> Reward, false)
+                            else
+                                None
+
+                    Some room.Shop, reward
                 | _ -> None, None
 
             if
                 CombatSceneManager.Instance.CurrentMode = CombatSceneManager.Mode.mapSelection
                 && not MapManager.Instance.map.MovingInProgress
                 && MapManager.Instance.map.LocationSelectionMode
+                && not MapManager.Instance.mapScreen.IsInTransition
             then
                 shouldForce <- true
                 let map = Context.map ()
                 let act = this.Action ChoosePath
-                let minIdx = map.paths |> List.map _.pathIndex.Value |> List.min
-                let maxIdx = map.paths |> List.map _.pathIndex.Value |> List.max
 
-                act.MutateProp "pathIndex" (fun x ->
-                    let x = x :?> IntegerSchema
-                    x.Minimum <- Some minIdx
-                    x.Maximum <- Some maxIdx)
+                if not (List.isEmpty map.paths) then
+                    let minIdx = map.paths |> List.map _.pathIndex.Value |> List.min
+                    let maxIdx = map.paths |> List.map _.pathIndex.Value |> List.max
 
-                actions <- act :: actions
+                    act.MutateProp "pathIndex" (fun x ->
+                        let x = x :?> IntegerSchema
+                        x.Minimum <- Some minIdx
+                        x.Maximum <- Some maxIdx)
+
+                    actions <- act :: actions
 
             shop
             |> Option.iter (fun shop ->
@@ -1635,17 +1654,22 @@ type Game(plugin: MainClass) =
                     actions <- act :: actions))
 
             reward
-            |> Option.bind (fun x -> Option.map (fun y -> x, y) (Context.reward x))
-            |> Option.iter (fun (reward, ctx) ->
+            |> Option.bind (fun x -> Option.map (fun y -> x, y) (Context.reward (fst x)))
+            |> Option.iter (fun ((reward, forceIfOk), ctx) ->
+                let reward = reward
+
                 match reward with
-                | :? NewTileReward ->
+                | :? NewTileReward when reward.gameObject.activeSelf ->
                     ctx.pickTileOptions
                     |> Option.iter (fun opts ->
+                        if forceIfOk then
+                            shouldForce <- true
+
                         let names = Array.ofList opts |> Array.map _.name
                         let act = this.Action PickTileReward
                         act.MutateProp "tileName" (fun x -> (x :?> StringSchema).SetEnum(names))
                         actions <- act :: actions)
-                | :? TileUpgradeReward as reward ->
+                | :? TileUpgradeReward as reward when reward.TileUpgrade <> null ->
                     let deck =
                         Context.deck ()
                         |> Seq.filter (snd >> reward.TileUpgrade.CanUpgradeTile)
@@ -1654,47 +1678,63 @@ type Game(plugin: MainClass) =
 
                     ctx.tileUpgrade
                     |> Option.iter (fun _ ->
+                        if forceIfOk then
+                            shouldForce <- true
+
                         let act = this.Action ApplyUpgrade
                         act.MutateProp "tileName" (fun x -> (x :?> StringSchema).SetEnum(deck))
                         actions <- act :: actions)
 
                     ctx.tileSacrificeReward
                     |> Option.iter (fun _ ->
+                        if forceIfOk then
+                            shouldForce <- true
+
                         let act = this.Action SacrificeTile
                         act.MutateProp "tileName" (fun x -> (x :?> StringSchema).SetEnum(deck))
                         actions <- act :: actions)
 
                     if ctx.warriorsGamble then
+                        if forceIfOk then
+                            shouldForce <- true
+
                         let act = this.Action GambleTile
                         act.MutateProp "tileName" (fun x -> (x :?> StringSchema).SetEnum(deck))
                         actions <- act :: actions
+                | :? NewTileReward
+                | :? TileUpgradeReward ->
+                    if not reward.Exausted then
+                        shouldForce <- false
+                // this.LogDebug "Reward not ready"
+                | null -> this.LogError "Null reward"
                 | _ -> this.LogError "Unknown reward")
 
-            let potions =
-                PotionsManager.Instance.HeldPotions
-                |> Array.filter (_.AlreadyUsed >> not)
-                |> Array.filter _.CanBeUsed
-                |> Array.map _.Name
+            if CombatSceneManager.Instance.CurrentMode <> CombatSceneManager.Mode.mapSelection then
+                let potions =
+                    PotionsManager.Instance.HeldPotions
+                    |> Array.filter (_.AlreadyUsed >> not)
+                    |> Array.filter _.CanBeUsed
+                    |> Array.map _.Name
 
-            let usePotion = this.Action Consume
-            usePotion.MutateProp "consumableName" (fun x -> (x :?> StringSchema).SetEnum(potions))
-            actions <- usePotion :: actions
+                let usePotion = this.Action Consume
+                usePotion.MutateProp "consumableName" (fun x -> (x :?> StringSchema).SetEnum(potions))
+                actions <- usePotion :: actions
 
-            let potions =
-                PotionsManager.Instance.HeldPotions
-                |> Array.filter (_.AlreadyUsed >> not)
-                |> Array.filter _.CanBeSold
-                |> Array.map _.Name
+                let potions =
+                    PotionsManager.Instance.HeldPotions
+                    |> Array.filter (_.AlreadyUsed >> not)
+                    |> Array.filter _.CanBeSold
+                    |> Array.map _.Name
 
-            let sellPotion = this.Action SellConsumable
-            sellPotion.MutateProp "consumableName" (fun x -> (x :?> StringSchema).SetEnum(potions))
-            actions <- sellPotion :: actions
+                let sellPotion = this.Action SellConsumable
+                sellPotion.MutateProp "consumableName" (fun x -> (x :?> StringSchema).SetEnum(potions))
+                actions <- sellPotion :: actions
 
             let actions = actions |> List.filter _.Valid
 
             this.RetainActions(actions |> List.map (fun x -> x))
 
-            if shouldForce then
+            if shouldForce && inhibitForces = 0 then
                 let newForce = actions |> List.map _.Name
 
                 if
@@ -1741,7 +1781,8 @@ type Game(plugin: MainClass) =
                 match toBuy with
                 | Some ui ->
                     let price = copyPrice ui.price
-                    (Result.toOption shop).Value.SelectedTarget <- ui
+                    let shop = (Result.toOption shop).Value
+                    UINavigation.UINavigationHelper.SelectNewTarget(shop, ui)
                     ui.Submit()
                     Ok(Some $"Bought {name} for {fmtPrice' price}")
                 | None ->
@@ -2294,11 +2335,10 @@ type Game(plugin: MainClass) =
                     | :? AddAttackEffectTileUpgrade
                     | :? AddTileEffectTileUpgrade
                     | :? StatsTileUpgrade ->
-                        let txt = reward.TileUpgrade.CannotUpgradeText(tile)
-
-                        if txt = "" then
+                        if reward.TileUpgrade.CanUpgradeTile tile then
                             Ok(reward, tile)
                         else
+                            let txt = reward.TileUpgrade.CannotUpgradeText tile
                             Error(Some(stripTags txt))
                     | _ -> Error(Some "You can't use this action in this location")
                 | _ -> Error(Some "You can't use this action in this location"))
@@ -2333,11 +2373,10 @@ type Game(plugin: MainClass) =
                 | :? TileUpgradeReward as reward ->
                     match reward.TileUpgrade with
                     | :? WarriorGambleUpgrade ->
-                        let txt = reward.TileUpgrade.CannotUpgradeText(tile)
-
-                        if txt = "" then
+                        if reward.TileUpgrade.CanUpgradeTile tile then
                             Ok(reward, tile)
                         else
+                            let txt = reward.TileUpgrade.CannotUpgradeText tile
                             Error(Some(stripTags txt))
                     | _ -> Error(Some "You can't use this action in this location")
                 | _ -> Error(Some "You can't use this action in this location"))
@@ -2372,11 +2411,10 @@ type Game(plugin: MainClass) =
                 | :? TileUpgradeReward as reward ->
                     match reward.TileUpgrade with
                     | :? SacrificeTileUpgrade ->
-                        let txt = reward.TileUpgrade.CannotUpgradeText(tile)
-
-                        if txt = "" then
+                        if reward.TileUpgrade.CanUpgradeTile tile then
                             Ok(reward, tile)
                         else
+                            let txt = reward.TileUpgrade.CannotUpgradeText tile
                             Error(Some(stripTags txt))
                     | _ -> Error(Some "You can't use this action in this location")
                 | _ -> Error(Some "You can't use this action in this location"))
@@ -2593,6 +2631,6 @@ and [<BepInPlugin("org.pavluk.neuroshogun", "NeuroShogun", "1.0.0")>] MainClass(
             Globals.DeveloperUtils._invulnerable <- true
             // Globals.DeveloperUtils._customLocation <- true
             Globals.DeveloperUtils._quick <- true
-        // Globals.DeveloperUtils._shortLocations <- true
+            Globals.DeveloperUtils._shortLocations <- true
         else
             ()

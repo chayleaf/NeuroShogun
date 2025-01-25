@@ -24,24 +24,38 @@ type public Patches() =
     [<HarmonyPatch(typeof<Shop>, "ShopkeeperGiveFreeConsumableCoroutine")>]
     [<HarmonyPostfix>]
     static member PostShopkeeperGiveFreeConsumableCoroutine(__result: IEnumerator byref) =
+        MainClass.Instance.Logger.LogInfo "freec start"
         MainClass.Instance.Game.InhibitForces <- true
-        __result <- EnumeratorWrapper(__result, ignore, (fun () -> MainClass.Instance.Game.InhibitForces <- false))
+
+        __result <-
+            EnumeratorWrapper(
+                __result,
+                ignore,
+                (fun () ->
+                    MainClass.Instance.Logger.LogInfo "freec end"
+                    MainClass.Instance.Game.InhibitForces <- false)
+            )
 
     [<HarmonyPatch(typeof<RainOfMirrorsEffect>, "PerformEffect")>]
     [<HarmonyPostfix>]
     static member PerformRainOfMirrors(__result: IEnumerator byref) =
+        MainClass.Instance.Logger.LogInfo "rom start"
         MainClass.Instance.Game.InhibitForces <- true
-        __result <- EnumeratorWrapper(__result, ignore, (fun () -> MainClass.Instance.Game.InhibitForces <- false))
+        __result <- EnumeratorWrapper(__result, ignore, (fun () ->
+            MainClass.Instance.Logger.LogInfo "rom end"
+            MainClass.Instance.Game.InhibitForces <- false))
 
     [<HarmonyPatch(typeof<Shop>, "ItemBoughtSequenceBegin")>]
     [<HarmonyPostfix>]
     static member ShopLock() =
-        MainClass.Instance.Game.InhibitForces <- true
+        MainClass.Instance.Logger.LogInfo "ibs start"
+        // MainClass.Instance.Game.InhibitForces <- true
 
     [<HarmonyPatch(typeof<Shop>, "ItemBoughtSequenceOver")>]
     [<HarmonyPostfix>]
     static member ShopUnlock() =
-        MainClass.Instance.Game.InhibitForces <- false
+        MainClass.Instance.Logger.LogInfo "ibs end"
+        // MainClass.Instance.Game.InhibitForces <- false
 
     [<HarmonyPatch(typeof<DioramaManager>, "Start")>]
     [<HarmonyPrefix>]
@@ -123,4 +137,7 @@ type public Patches() =
     [<HarmonyPostfix>]
     static member HeroSelectionStart(__result: IEnumerator byref) =
         MainClass.Instance.Game.InhibitForces <- true
-        __result <- EnumeratorWrapper(__result, ignore, (fun () -> MainClass.Instance.Game.InhibitForces <- false))
+        MainClass.Instance.Logger.LogInfo "hero start"
+        __result <- EnumeratorWrapper(__result, ignore, (fun () ->
+            MainClass.Instance.Logger.LogInfo "hero end"
+            MainClass.Instance.Game.InhibitForces <- false))

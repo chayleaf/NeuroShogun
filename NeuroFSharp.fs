@@ -434,7 +434,12 @@ type ArraySchema(items: Schema) =
         @ ("items", this.Items.JsonValue()) :: base.JsonProps()
 
 
-    override _.Clone() = ArraySchema(items.Clone())
+    override _.Clone() =
+        let mutable ret = ArraySchema(items.Clone())
+        ret.Unique <- unique
+        ret.MinItems <- minItems
+        ret.MaxItems <- maxItems
+        ret
 
 type Action(name: string, description: string) =
     inherit Attribute()
@@ -673,16 +678,15 @@ module internal TypeInfo =
 
             match tagName with
             | Some(tagName) ->
-                let ret =
-                    ret
-                    |> Seq.append (Seq.singleton (tagName, JsonValue.String info.caseName))
-                    |> Array.ofSeq
-
-                if Array.isEmpty ret then
-                    JsonValue.String tagName
+                ret
+                |> Seq.append (Seq.singleton (tagName, JsonValue.String info.caseName))
+                |> Array.ofSeq
+                |> JsonValue.Record
+            | None ->
+                if Seq.isEmpty ret then
+                    JsonValue.String info.caseName
                 else
-                    JsonValue.Record ret
-            | None -> JsonValue.Record [| (info.caseName, ret |> Array.ofSeq |> JsonValue.Record) |]
+                    JsonValue.Record [| (info.caseName, ret |> Array.ofSeq |> JsonValue.Record) |]
         | Option info ->
             let _, fields = FSharpValue.GetUnionFields(obj, ty)
 
