@@ -11,30 +11,24 @@
       https://nuget.samboy.dev/v3/index.json
     </RestoreAdditionalProjectSources>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
-    <Nullable>enable</Nullable>
+    <!--<Nullable>enable</Nullable>-->
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
     <GenerateProgramFile>false</GenerateProgramFile>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="BepInEx.Core" Version="5.4.21" IncludeAssets="compile" />
-    <!-- <PackageReference Include="FSharp.Data" Version="6.4.1" />
-    <PackageReference Include="FSharp.Json" Version="0.4.1" /> -->
     <!--<PackageReference Include="BepInEx.Unity.Mono" Version="6.0.0-be.*" IncludeAssets="compile" />-->
     <PackageReference Include="UnityEngine.Modules" Version="2021.3.43" IncludeAssets="compile" />
     <PackageReference Update="FSharp.Core" Version="8.0.301" />
     <Reference Include="Assembly-CSharp">
       <HintPath>lib\Assembly-CSharp.dll</HintPath>
     </Reference>
-    <!-- <Reference Include="MMHOOK_Assembly-CSharp">
-      <HintPath>lib\MMHOOK_Assembly-CSharp.dll</HintPath>
-    </Reference> -->
   </ItemGroup>
 
   <ItemGroup Condition="'$(TargetFramework.TrimEnd(`0123456789`))' == 'net'">
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.2" PrivateAssets="all" />
   </ItemGroup>
-
 
   <ItemGroup>
     <Compile Include="JsonValue.fs" />

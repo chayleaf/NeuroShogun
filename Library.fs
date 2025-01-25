@@ -2748,7 +2748,7 @@ and [<BepInPlugin("org.pavluk.neuroshogun", "NeuroShogun", "1.0.0")>] MainClass(
             game <-
                 Some(
                     let game = Game(this)
-                    game.Start(Some("ws://127.0.0.1:8000"), cts.Token) |> ignore
+                    game.Start(None, cts.Token) |> ignore
                     game
                 )
 
