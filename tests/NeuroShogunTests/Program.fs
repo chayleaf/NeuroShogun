@@ -79,6 +79,10 @@ let schemaTests =
                    sch3.Required <- Some([| "test" |])
                    not sch1.Valid && sch2.Valid && not sch3.Valid)
                   "validity"
+          }
+          test "equals" {
+              let schema = TypeInfo.fromSystemType typeof<TestType> |> TypeInfo.schema
+              Expect.isTrue (schema.EqualTo(schema.Clone())) "equals"
           } ]
 
 type ActionsTest =

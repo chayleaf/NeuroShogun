@@ -1,4 +1,3 @@
-// Implementation notes:
 // - Deserialization of sum types works by reading the "command" field, or just by their snake case string name
 //   (I could implement more but there's no point in doing that)
 // - Deserialization of enums works by using their snake case name
@@ -188,18 +187,14 @@ type ISerializable =
     abstract JsonValue: unit -> JsonValue
 
 type Schema(ty: SchemaType) =
-    let mutable dirty = false
-
     interface ISerializable with
         override this.JsonValue() : JsonValue =
             JsonValue.Record(Array.ofList (List.rev (this.JsonProps())))
 
     // Set this to signal that this should be unregistered if already registered
-    abstract member Dirty: bool with get, set
+    abstract member EqualTo: Schema -> bool
 
-    default _.Dirty
-        with get () = dirty
-        and set value = dirty <- value
+    default _.EqualTo(other: Schema) = ty = other.Type
 
     abstract member Valid: bool
     default _.Valid = true
@@ -233,37 +228,33 @@ type StringSchema() =
         with get () = enum
         and set value = enum <- value
 
-    member this.SetEnum(values: string array) =
+    override _.EqualTo(other: Schema) =
+        base.EqualTo(other) && enum = (other :?> StringSchema).Enum
+
+    member _.SetEnum(values: string array) =
         let prev = Option.defaultValue Array.empty enum
         let cur = values
 
         if Option.isNone enum || prev.Length <> cur.Length || Array.exists2 (<>) prev cur then
             enum <- Some cur
-            this.Dirty <- true
 
-    member this.RetainEnum(filter: string -> bool) =
+    member _.RetainEnum(filter: string -> bool) =
         let prev = enum.Value
         let cur = Array.filter filter enum0.Value
 
         if prev.Length <> cur.Length || Array.exists2 (<>) prev cur then
             enum <- Some cur
-            this.Dirty <- true
 
     override _.Valid = not (enum |> Option.exists (Array.length >> (=) 0))
 
     override _.Clone() =
-        let cloneOptArr x =
-            match x with
-            | None -> None
-            | Some(x) -> Some <| Array.map id x
-
         let mutable ret = StringSchema()
-        ret.InitialEnum <- cloneOptArr enum0
-        ret.Enum <- cloneOptArr enum
+        ret.InitialEnum <- enum0
+        ret.Enum <- enum
         ret
 
-    override this.JsonProps() : (string * JsonValue) list =
-        (this.Enum
+    override _.JsonProps() : (string * JsonValue) list =
+        (enum
          |> Option.map (fun x -> ("enum", x |> Array.map JsonValue.String |> JsonValue.Array))
          |> Option.toList)
         @ base.JsonProps()
@@ -275,13 +266,13 @@ type ObjectSchema(properties: (string * Schema) array) =
 
     let mutable required: string array option = None
 
-    override _.Dirty
-        with get () = base.Dirty || props |> Array.exists (snd >> _.Dirty)
-        and set value =
-            base.Dirty <- value
+    override _.EqualTo(other: Schema) =
+        base.EqualTo(other)
+        && (let rhs = other :?> ObjectSchema
 
-            if not value then
-                props |> Array.iter (fun (_, v) -> v.Dirty <- value)
+            required = rhs.Required
+            && Array.length props = Array.length rhs.Properties
+            && (props |> Array.forall2 (fun (k1, v1) (k2, v2) -> k1 = k2 && v1.EqualTo(v2))) rhs.Properties)
 
     override _.Valid =
         match required with
@@ -299,14 +290,11 @@ type ObjectSchema(properties: (string * Schema) array) =
         and set value = required <- value
 
     override _.Clone() =
-        let cloneOptArr x =
-            match x with
-            | None -> None
-            | Some(x) -> Some <| Array.map id x
+        let mutable ret =
+            ObjectSchema(properties |> Array.map (fun (k, v) -> (k, v.Clone())))
 
-        let mutable ret = ObjectSchema(props |> Array.map (fun (k, v) -> (k, v.Clone())))
-
-        ret.Required <- cloneOptArr required
+        ret.Properties <- props |> Array.map (fun (k, v) -> (k, v.Clone()))
+        ret.Required <- required
         ret
 
     member _.MutateProp (name: string) (func: Schema -> unit) =
@@ -326,6 +314,16 @@ type IntegerSchema() =
     let mutable xmin = None
     let mutable max = None
     let mutable xmax = None
+
+    override _.EqualTo(other: Schema) =
+
+        base.EqualTo(other)
+        && (let rhs = other :?> IntegerSchema
+
+            min = rhs.Minimum
+            && max = rhs.Maximum
+            && xmin = rhs.ExclusiveMinimum
+            && xmax = rhs.ExclusiveMaximum)
 
     override _.Valid =
         true
@@ -394,20 +392,47 @@ type BooleanSchema() =
 type ArraySchema(items: Schema) =
     inherit Schema(Array)
 
+    let mutable unique = false
+    let mutable minItems = 0
+    let mutable maxItems = None
+
+    override _.EqualTo(other: Schema) =
+        base.EqualTo(other)
+        && (let rhs = other :?> ArraySchema
+
+            unique = rhs.Unique
+            && minItems = rhs.MinItems
+            && maxItems = rhs.MaxItems
+            && items.EqualTo(rhs.Items))
+
     member _.Items = items
 
     override _.Valid = items.Valid
 
-    override _.Dirty
-        with get () = base.Dirty || items.Dirty
-        and set value =
-            base.Dirty <- value
+    member _.Unique
+        with get () = unique
+        and set value = unique <- value
 
-            if not value then
-                items.Dirty <- value
+    member _.MinItems
+        with get () = minItems
+        and set value = minItems <- value
+
+    member _.MaxItems
+        with get () = maxItems
+        and set value = maxItems <- value
 
     override this.JsonProps() : (string * JsonValue) list =
-        ("items", this.Items.JsonValue()) :: base.JsonProps()
+        (if unique then
+             [ ("uniqueItems", JsonValue.Boolean true) ]
+         else
+             [])
+        @ (Option.toList (Option.map (fun x -> ("maxItems", JsonValue.Number(decimal x))) maxItems))
+        @ (if minItems = 0 then
+               []
+           else
+               [ ("minItems", JsonValue.Number(decimal minItems)) ])
+        @ ("items", this.Items.JsonValue()) :: base.JsonProps()
+
 
     override _.Clone() = ArraySchema(items.Clone())
 
@@ -416,7 +441,6 @@ type Action(name: string, description: string) =
     let mutable schema: ObjectSchema option = None
     let mutable schema1: ObjectSchema option = None
     let mutable desc = description
-    let mutable dirty = false
 
     interface ISerializable with
         override this.JsonValue() : JsonValue =
@@ -435,29 +459,32 @@ type Action(name: string, description: string) =
     member _.Name = name
     member _.InitialDescription = description
 
-    member _.Dirty
-        with get () = dirty || schema |> Option.exists _.Dirty
-        and set value =
-            if value then
-                dirty <- true
-            else
-                dirty <- false
-                schema |> Option.iter (fun x -> x.Dirty <- false)
+    member _.Clone() : Action =
+        let mutable ret = new Action(name, description)
+        ret.Description <- desc
+        ret.InitialSchema <- (schema1 |> Option.map (fun x -> x.Clone() :?> ObjectSchema))
+        ret.Schema <- (schema |> Option.map (fun x -> x.Clone() :?> ObjectSchema))
+        ret
+
+    member _.EqualTo(other: Action) =
+        name = other.Name
+        && desc = other.Description
+        && (Option.isNone schema && Option.isNone other.Schema
+            || Option.defaultValue false ((schema |> Option.map2 (fun a b -> a.EqualTo(b))) other.Schema))
 
     member _.InitialSchema
         with get () = schema1
-        and set value = schema1 <- value
+        and set (value: ObjectSchema option) = schema1 <- value
 
     member _.Description
         with get () = desc
         and set value =
             if desc <> value then
                 desc <- value
-                dirty <- true
 
     member _.Schema
         with get () = schema
-        and set value = schema <- value
+        and set (value: ObjectSchema option) = schema <- value
 
     member this.MutateProp (name: string) (func: Schema -> unit) = this.Schema.Value.MutateProp name func
 
@@ -646,13 +673,15 @@ module internal TypeInfo =
 
             match tagName with
             | Some(tagName) ->
-                if Seq.isEmpty ret then
-                    JsonValue.String tagName
-                else
+                let ret =
                     ret
                     |> Seq.append (Seq.singleton (tagName, JsonValue.String info.caseName))
                     |> Array.ofSeq
-                    |> JsonValue.Record
+
+                if Array.isEmpty ret then
+                    JsonValue.String tagName
+                else
+                    JsonValue.Record ret
             | None -> JsonValue.Record [| (info.caseName, ret |> Array.ofSeq |> JsonValue.Record) |]
         | Option info ->
             let _, fields = FSharpValue.GetUnionFields(obj, ty)
@@ -1034,21 +1063,22 @@ type Game<'T>() =
             mp <-
                 Some(
                     MailboxProcessor.StartImmediate(fun mp ->
-                        let mutable registered = Set.empty
+                        let mutable registered = Map.empty
 
                         let rec mapCommand msg =
                             match msg with
                             | MsgRetain actions ->
                                 let new_reg = actions |> List.filter _.Valid |> List.map _.Name |> Set.ofList
 
-                                let unreg = registered |> Seq.filter (new_reg.Contains >> not) |> List.ofSeq
+                                let unreg =
+                                    Map.keys registered |> Seq.filter (new_reg.Contains >> not) |> List.ofSeq
 
                                 // map it again for sanitization
                                 mapCommand (MsgCmd(Actions_Unregister(gameName, { action_names = unreg })))
                                 @ mapCommand (MsgCmd(Actions_Register(gameName, { actions = actions })))
                             | MsgCmd(Startup game) ->
                                 this.LogDebug("resetting registered actions")
-                                registered <- Set.empty
+                                registered <- Map.empty
                                 [ (Startup game) ]
                             | MsgCmd(Actions_Register(game, { actions = actions })) ->
                                 let mutable unregister = List.empty
@@ -1057,25 +1087,24 @@ type Game<'T>() =
                                     actions
                                     |> List.filter (fun x ->
                                         if not x.Valid then
-                                            if registered.Contains x.Name then
+                                            if registered.ContainsKey x.Name then
                                                 unregister <- x.Name :: unregister
                                                 this.LogDebug($"unregistering {x.Name} (invalid)")
-                                                registered <- registered.Remove(x.Name)
+                                                registered <- registered.Remove x.Name
 
                                             false
-                                        elif registered.Contains x.Name then
-                                            if x.Dirty then
-                                                x.Dirty <- false
-                                                unregister <- x.Name :: unregister
+                                        else
+                                            match Map.tryFind x.Name registered with
+                                            | Some y when x.EqualTo y -> false
+                                            | Some y ->
+                                                registered <- Map.add x.Name (x.Clone()) registered
+                                                unregister <- y.Name :: unregister
                                                 this.LogDebug($"reregistering {x.Name}")
                                                 true
-                                            else
-                                                false
-                                        else
-                                            registered <- registered.Add(x.Name)
-                                            this.LogDebug($"registering {x.Name}")
-                                            x.Dirty <- false
-                                            true)
+                                            | None ->
+                                                registered <- Map.add x.Name (x.Clone()) registered
+                                                this.LogDebug($"registering {x.Name}")
+                                                true)
 
                                 if actions'.IsEmpty then
                                     if unregister.IsEmpty then
@@ -1093,9 +1122,9 @@ type Game<'T>() =
                                 let actions' =
                                     actions
                                     |> List.filter (fun name ->
-                                        if registered.Contains name then
+                                        if registered.ContainsKey name then
                                             this.LogDebug($"unregistering {name}")
-                                            registered <- registered.Remove(name)
+                                            registered <- registered.Remove name
                                             true
                                         else
                                             false)

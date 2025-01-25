@@ -118,3 +118,9 @@ type public Patches() =
     [<HarmonyPostfix>]
     static member HeroSwitched(__result: IEnumerator byref, __instance: HeroSelection) =
         __result <- EnumeratorWrapper(__result, ignore, (fun () -> __instance.GoToNextRoom()))
+
+    [<HarmonyPatch(typeof<HeroSelection>, "AgentEntersCoroutine")>]
+    [<HarmonyPostfix>]
+    static member HeroSelectionStart(__result: IEnumerator byref) =
+        MainClass.Instance.Game.InhibitForces <- true
+        __result <- EnumeratorWrapper(__result, ignore, (fun () -> MainClass.Instance.Game.InhibitForces <- false))

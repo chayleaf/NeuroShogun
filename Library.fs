@@ -867,12 +867,13 @@ module Context =
                 let r n = if n < 0 then Some(-n) else None
 
                 match reward with
-                | :? NewTileReward as reward ->
+                | :? NewTileReward as reward when reward.gameObject.activeSelf ->
                     let _, map = deckMap ()
 
                     let pickTileOptions =
                         reward.NewTilePedestals
                         |> Array.map _.Tile
+                        |> Array.filter ((<>) null)
                         |> Array.mapFold
                             (fun state tile ->
                                 let name = stripTags tile.Attack.Name
@@ -886,7 +887,7 @@ module Context =
                         |> List.ofArray
 
                     None, None, Some pickTileOptions, None, None, false
-                | :? TileUpgradeReward as reward ->
+                | :? TileUpgradeReward as reward when reward.TileUpgrade <> null ->
                     match reward.TileUpgrade with
                     | :? AddAttackEffectTileUpgrade as reward ->
                         let upg =
@@ -1084,12 +1085,14 @@ type Game(plugin: MainClass) =
     let mutable isForce = false
     let mutable forceNames = None
 
-    member _.InhibitForces
+    member this.InhibitForces
         with set value =
             if value then
                 inhibitForces <- inhibitForces + 1
             else
                 inhibitForces <- inhibitForces - 1
+
+            this.LogDebug $"Inhibitiion level {inhibitForces}"
 
     member _.ScheduleDioramaSkip() =
         skipDioramaTime <- Some(DateTime.UtcNow.AddSeconds(1))
@@ -1106,7 +1109,7 @@ type Game(plugin: MainClass) =
     member _.NobunagaCells(cells: Cell list) = nobunagaCells <- cells
 
     member this.PerformForce(names: string list) =
-        if inhibitForces = 0 then
+        if inhibitForces = 0 && not (List.isEmpty names) then
             let ctx = Context.context nobunagaCells trapCells
 
             isForce <- true
@@ -1156,7 +1159,7 @@ type Game(plugin: MainClass) =
         | :? Hero -> $"You have been hit by {atkName} for {hit.Damage} damage.{effects}"
         | :? NobunagaBoss when nobunagaCells |> List.exists ((=) agent.Cell) |> not ->
             $"{agent.Name} got hit by {atkName}, but the attack didn't seem to have any effect..."
-        | _ -> $"{attacker.Name} has been hit by {atkName}.{effects}"
+        | _ -> $"{agent.Name} has been hit by {atkName}.{effects}"
         |> this.Context false
 
     member this.ShowCatDialogue(text: string) =
@@ -1327,7 +1330,7 @@ type Game(plugin: MainClass) =
             man.RewardBusy.AddListener(fun () -> inhibitForces <- inhibitForces + 1)
             man.RewardReady.AddListener(fun () -> inhibitForces <- inhibitForces - 1)
 
-        this.ReregisterActions()
+        this.ReregisterActions' false
 
         match forceNames with
         | Some names when not isForce -> this.PerformForce names
@@ -1343,8 +1346,10 @@ type Game(plugin: MainClass) =
             chars.SkipPressed()
             skipDioramaTime <- None
 
-    override this.ReregisterActions() =
-        let mutable shouldForce = false
+    override this.ReregisterActions() = this.ReregisterActions' true
+
+    member this.ReregisterActions'(forceAnyway: bool) =
+        let mutable shouldForce = forceAnyway
 
         if
             CombatManager.Instance = null
@@ -1380,10 +1385,17 @@ type Game(plugin: MainClass) =
                   (this.Action CheatKill)
                   (this.Action CheatHeal)*) ]
 
+            let lock =
+                typeof<CombatManager>
+                    .GetField("heroPlayedTileInThisUpdate", BindingFlags.NonPublic ||| BindingFlags.Instance)
+                    .GetValue(CombatManager.Instance)
+                :?> bool
+
             if
                 CombatManager.Instance.CombatInProgress
                 && not CombatManager.Instance.TurnInProgress
                 && CombatManager.Instance.AllowHeroAction
+                && not lock
             then
 
                 if Globals.Hero.AllowWait then
@@ -1408,7 +1420,10 @@ type Game(plugin: MainClass) =
                         let atk = this.Action Attack
 
                         atk.MutateProp "tileNames" (fun x ->
-                            ((x :?> ArraySchema).Items :?> StringSchema).SetEnum(queue))
+                            let x = (x :?> ArraySchema)
+                            x.Unique <- true
+                            x.MinItems <- 1
+                            (x.Items :?> StringSchema).SetEnum(queue))
 
                         actions <- atk :: actions
 
@@ -1549,6 +1564,8 @@ type Game(plugin: MainClass) =
                     x.Minimum <- Some minIdx
                     x.Maximum <- Some maxIdx)
 
+                actions <- act :: actions
+
             shop
             |> Option.iter (fun shop ->
                 let ctx = Context.shop true shop
@@ -1680,11 +1697,9 @@ type Game(plugin: MainClass) =
             if shouldForce then
                 let newForce = actions |> List.map _.Name
 
-                if not isForce then
-                    this.LogDebug($"!isforce {newForce}")
-
                 if
-                    not isForce
+                    forceAnyway
+                    || not isForce
                     || isForce
                        && not (
                            forceNames
@@ -1694,7 +1709,7 @@ type Game(plugin: MainClass) =
                     isForce <- false
                     forceNames <- Some newForce
 
-    override _.Name = "test"
+    override _.Name = "Shogun Showdown"
 
     override this.HandleAction(action: Actions) =
         let copyPrice (price: Price) : (ShopStuff.CurrencyEnum * int) = (price.Currency, price.Value)
@@ -1712,6 +1727,12 @@ type Game(plugin: MainClass) =
         let fmtPrice' = fmtPrice'' " now"
         let fmtPrice = copyPrice >> fmtPrice'' ""
 
+        let shop =
+            match CombatSceneManager.Instance.Room with
+            | :? CampRoom as room -> Ok room.UnlocksShop
+            | :? ShopRoom as room -> Ok room.Shop
+            | _ -> Error(Some "There's no shop in this room!")
+
         let finalizePurchase (name: string) (x: Result<ShopItemUI list, string option>) =
             x
             |> Result.bind (fun thisItem ->
@@ -1720,6 +1741,7 @@ type Game(plugin: MainClass) =
                 match toBuy with
                 | Some ui ->
                     let price = copyPrice ui.price
+                    (Result.toOption shop).Value.SelectedTarget <- ui
                     ui.Submit()
                     Ok(Some $"Bought {name} for {fmtPrice' price}")
                 | None ->
@@ -1740,12 +1762,6 @@ type Game(plugin: MainClass) =
                     Error(Some "You can't do that in this shop")
                 else
                     Ok(List.map fst thisItem))
-
-        let shop =
-            match CombatSceneManager.Instance.Room with
-            | :? CampRoom as room -> Ok room.UnlocksShop
-            | :? ShopRoom as room -> Ok room.Shop
-            | _ -> Error(Some "There's no shop in this room!")
 
         let reward =
             match CombatSceneManager.Instance.Room with
@@ -2374,7 +2390,6 @@ type Game(plugin: MainClass) =
                     Error(Some "Unknown mod error"))
         | PickTileReward tileName ->
             reward
-            |> chk TilesManager.Instance.CanInteractWithTiles "You can't currently use tiles"
             |> chk
                 (CombatSceneManager.Instance.CurrentMode = CombatSceneManager.Mode.reward)
                 "You are not currently in reward mode"
@@ -2439,7 +2454,7 @@ type Game(plugin: MainClass) =
                 let locked =
                     typeof<HeroSelection>
                         .GetField("transitionInProgress", BindingFlags.NonPublic ||| BindingFlags.Instance)
-                        .GetValue(shop)
+                        .GetValue(sel)
                     :?> bool
 
                 match
