@@ -870,11 +870,19 @@ module Context =
                 let r n = if n < 0 then Some(-n) else None
 
                 match reward with
-                | :? NewTileReward as reward when reward.gameObject.activeSelf ->
+                | :? NewTileReward as reward when reward.gameObject.activeSelf && reward.NewTilePedestals <> null ->
                     let _, map = deckMap ()
 
                     let pickTileOptions =
                         reward.NewTilePedestals
+                        |> Array.filter (fun p ->
+                            let b =
+                                typeof<NewTilePedestal>
+                                    .GetField("button", BindingFlags.NonPublic ||| BindingFlags.Instance)
+                                    .GetValue(p)
+                                :?> MyButton
+
+                            b.Interactable)
                         |> Array.map _.Tile
                         |> Array.filter ((<>) null)
                         |> Array.mapFold
@@ -889,7 +897,13 @@ module Context =
                         |> Array.map (fun (s, x) -> tile true (Some s) x)
                         |> List.ofArray
 
-                    None, None, Some pickTileOptions, None, None, false
+                    let pickTileOptions =
+                        if List.isEmpty pickTileOptions then
+                            None
+                        else
+                            Some pickTileOptions
+
+                    None, None, pickTileOptions, None, None, false
                 | :? TileUpgradeReward as reward when reward.TileUpgrade <> null ->
                     match reward.TileUpgrade with
                     | :? AddAttackEffectTileUpgrade as reward ->
@@ -1591,6 +1605,7 @@ type Game(plugin: MainClass) =
             shop
             |> Option.iter (fun shop ->
                 let ctx = Context.shop true shop
+
                 if Option.isSome reward then
                     shouldForce <- true
 
@@ -2461,6 +2476,7 @@ type Game(plugin: MainClass) =
                         )
                 | _ -> Error(Some "You can't use this action in this location"))
             |> Result.map (fun tile ->
+                tile.Select()
                 tile.OnButtonClick()
                 None)
         | RerollRewards ->
