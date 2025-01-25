@@ -247,12 +247,12 @@ type public Patches() =
     [<HarmonyPatch(typeof<CorruptionAttackCombatTask>, "AddWarningToCells")>]
     [<HarmonyPostfix>]
     static member AddCorruptedWarnings(cells: Generic.List<Cell>) =
-        MainClass.Instance.Game.CorruptedCells <- cells |> List.ofSeq
+        MainClass.Instance.Game.CorruptedCells <- (cells |> List.ofSeq) @ MainClass.Instance.Game.CorruptedCells
 
-    [<HarmonyPatch(typeof<CorruptionAttackCombatTask>, "DestroyCellWarning")>]
+    (*[<HarmonyPatch(typeof<CorruptionAttackCombatTask>, "DestroyCellWarning")>]
     [<HarmonyPostfix>]
     static member RemoveCorruptedWarnings() =
-        MainClass.Instance.Game.CorruptedCells <- []
+        MainClass.Instance.Game.CorruptedCells <- []*)
 
     [<HarmonyPatch(typeof<Bomb>, nameof Unchecked.defaultof<Bomb>.Initialize)>]
     [<HarmonyPostfix>]
@@ -272,3 +272,18 @@ type public Patches() =
     [<HarmonyPatch(typeof<MakuEffect>, "CurtainUp")>]
     [<HarmonyPostfix>]
     static member CurtainUp() = MainClass.Instance.Game.CurtainUp()
+
+    [<HarmonyPatch(typeof<Agent>, "TelegraphAction")>]
+    [<HarmonyPostfix>]
+    static member TelegraphAction(__instance: Agent) =
+        match __instance with
+        | :? SniperEnemy as x ->
+            if x.Action = CombatEnums.ActionEnum.Attack then
+                MainClass.Instance.Game.AddWarning "Sniper is targeting this cell" Globals.Hero.Cell
+        | :? BaruBoss as x ->
+            if
+                x.Action = CombatEnums.ActionEnum.Attack
+                && x.HasInAttackStack TileEnums.AttackEnum.Volley
+            then
+                MainClass.Instance.Game.AddWarning "Baru is targeting this cell with volley" Globals.Hero.Cell
+        | _ -> ()

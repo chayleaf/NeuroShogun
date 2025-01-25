@@ -384,6 +384,7 @@ type EnemyContext =
 type CellState =
     { nobunaga: Cell list
       corrupted: Cell list
+      warnings: (string * Cell) list
       traps: (Cell * Trap) list
       bombs: (Cell * Bomb) list }
 
@@ -645,7 +646,7 @@ module Context =
                 Some(List.contains cell state.nobunaga)
           warnings =
             let warnings =
-                []
+                (state.warnings |> List.filter (snd >> (=) cell) |> List.map fst)
                 @ (if List.contains cell state.corrupted then
                        [ "Corruption strikes this cell on the next turn (damages units, heals bosses)" ]
                    else
@@ -1160,6 +1161,7 @@ type Game(plugin: MainClass) =
     let mutable corruptedCells = List.empty
     let mutable trapCells = List.empty
     let mutable bombCells = List.empty
+    let mutable warnings = List.empty
     let mutable trapCell = null
     let mutable skipDioramaTime = None
     let mutable isForce = false
@@ -1216,7 +1218,8 @@ type Game(plugin: MainClass) =
         with set cells = nobunagaCells <- cells
 
     member _.CorruptedCells
-        with set value = corruptedCells <- value
+        with get () = corruptedCells
+        and set value = corruptedCells <- value
 
     member this.PerformForce(names: string list) =
         try
@@ -1225,6 +1228,7 @@ type Game(plugin: MainClass) =
                     Context.context
                         { nobunaga = nobunagaCells
                           traps = trapCells
+                          warnings = warnings
                           bombs = bombCells
                           corrupted = corruptedCells }
 
@@ -1358,7 +1362,12 @@ type Game(plugin: MainClass) =
 
     member this.ShowDioramaDialogue(text: string) = this.Context false (dioramaLine text)
 
+    member _.AddWarning (text: string) (cell: Cell) = warnings <- (text, cell) :: warnings
+
     member this.EnemyTurnStart() =
+        corruptedCells <- List.empty
+        warnings <- List.empty
+
         if not (CombatSceneManager.Instance.Room :? CampRoom) then
             this.Context false "It's the enemies' turn..."
 
@@ -1390,6 +1399,7 @@ type Game(plugin: MainClass) =
         nobunagaCells <- List.empty
         trapCells <- List.empty
         corruptedCells <- List.empty
+        warnings <- List.empty
         bombCells <- List.empty
         let win = CombatSceneManager.Instance.progression.IsLastLevel
 
