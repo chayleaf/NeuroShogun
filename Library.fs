@@ -342,6 +342,7 @@ type LocationContext =
 type Intention =
     | MoveLeft
     | MoveRight
+    | MoveUp
     | LeapLeft
     | LeapRight
     | TurnLeft
@@ -517,12 +518,18 @@ module Context =
           unlockPrice = None
           cooldownCharge = Some $"{tile.CooldownCharge}/{tile.Attack.Cooldown}"
           inAttackQueue =
-            if player then
+            if
+                player
+                && CombatSceneManager.Instance.CurrentMode = CombatSceneManager.Mode.combat
+            then
                 Some(tile.TileContainer :? AttackQueueTileContainer)
             else
                 None
           upgradeSlotsUsed =
-            if player then
+            if
+                player
+                && CombatSceneManager.Instance.CurrentMode <> CombatSceneManager.Mode.combat
+            then
                 Some $"{tile.Attack.Level}/{tile.Attack.MaxLevel}"
             else
                 None }
@@ -556,7 +563,7 @@ module Context =
                 None
             else
                 traits
-                |> Array.map AgentEnums.AgentEnumsUtils.EnemyTraitDescription
+                |> Array.map (AgentEnums.AgentEnumsUtils.EnemyTraitDescription >> stripTags)
                 |> List.ofArray
                 |> Some
           elite =
@@ -566,6 +573,16 @@ module Context =
                 Some(AgentEnums.AgentEnumsUtils.EliteDescription enemy.EliteType)
           intention =
             match enemy.Action with
+            | CombatEnums.ActionEnum.Wait when (enemy :? CorruptedSoulBoss) ->
+                let enemy = enemy :?> CorruptedSoulBoss
+
+                let up =
+                    typeof<CorruptedSoulBoss>
+                        .GetField("goUpTrigger", BindingFlags.NonPublic ||| BindingFlags.Instance)
+                        .GetValue(enemy)
+                    :?> bool
+
+                if up then Intention.MoveUp else Intention.Wait
             | CombatEnums.ActionEnum.Wait -> Intention.Wait
             | CombatEnums.ActionEnum.MoveLeft when (enemy :? FumikoBoss || enemy :? StriderEnemy) -> Intention.LeapLeft
             | CombatEnums.ActionEnum.MoveLeft -> Intention.MoveLeft
@@ -983,7 +1000,13 @@ module Context =
                   rerollPrice = rerollPrice }
 
     let newGame (room: CampRoom) : NewGameContext option =
-        if room.HeroSelection.goButton.Interactable then
+        let locked =
+            typeof<HeroSelection>
+                .GetField("transitionInProgress", BindingFlags.NonPublic ||| BindingFlags.Instance)
+                .GetValue(room.HeroSelection)
+            :?> bool
+
+        if room.HeroSelection.goButton.Interactable && not locked then
             let heroes = room.HeroSelection.heroes |> Array.map hero |> List.ofArray
             let maxDay = heroes |> List.map _.maxUnlockedDay |> List.max
 
@@ -1145,7 +1168,9 @@ type Game(plugin: MainClass) =
     member this.ReceiveAttack(agent: Agent, hit: Hit, attacker: Agent) =
         let atkName =
             match attacker with
-            | :? Hero -> "you"
+            | :? Hero ->
+                hit.Damage <- hit.Damage * 100
+                "you"
             | null -> "poison/thorns/trap/shockwave/karma (figure it out yourself)"
             | _ -> attacker.Name
 
@@ -1209,16 +1234,17 @@ type Game(plugin: MainClass) =
 
                    $"Day 1: {name}"
                else
-                   { 1 .. Globals.Day - 1 }
-                   |> Seq.map (fun day ->
-                       let name =
-                           Utils.LocalizationUtils.LocalizedString("ShopAndNPC", $"Diorama_Day_{day}_Title")
+                   "Previous dialogue for reference:\n"
+                   + ({ 1 .. Globals.Day - 1 }
+                      |> Seq.map (fun day ->
+                          let name =
+                              Utils.LocalizationUtils.LocalizedString("ShopAndNPC", $"Diorama_Day_{day}_Title")
 
-                       Seq.append
-                           (seq { $"Day {day}: {name}" })
-                           (DioramaData.DioramaUtils.GetConversationLines day |> Seq.map dioramaLine))
-                   |> Seq.concat
-                   |> String.concat "\n")
+                          Seq.append
+                              (seq { $"Day {day}: {name}" })
+                              (DioramaData.DioramaUtils.GetConversationLines day |> Seq.map dioramaLine))
+                      |> Seq.concat
+                      |> String.concat "\n"))
 
     member this.DioramaEnd() =
         this.Context
@@ -1235,52 +1261,78 @@ type Game(plugin: MainClass) =
 
     member this.ShowDioramaDialogue(text: string) = this.Context false (dioramaLine text)
 
+    member this.EnemyTurnStart() =
+        if not (CombatSceneManager.Instance.Room :? CampRoom) then
+            this.Context false "It's the enemies' turn..."
+
+    member this.EnemyTurnEnd() =
+        if not (CombatSceneManager.Instance.Room :? CampRoom) then
+            this.Context false "The enemies' turn has ended."
+
+    member this.EnterRoom() =
+        this.Context
+            false
+            (match CombatSceneManager.Instance.Room with
+             | :? CampRoom as room ->
+                 "You are at the camp - a starting location. Here, you can access the metaprogression shop that unlocks new items for skulls, or you can start the game. The metaprogression shop's owner has a cat."
+                 + (if room.UnlocksShop.CanBuyAnything() then
+                        " You have items available for purchase in the shop."
+                    else
+                        " You can't currently purchase anything from the shop.")
+             | :? ShogunBossRoom ->
+                 $"You, {Globals.Hero.Name}, have reached the final boss - this is the Shogun Showdown!"
+             | :? BossRoom as room -> $"You, {Globals.Hero.Name}, have encountered a boss - {room.Boss.Name}"
+             | :? CombatRoom -> $"You have entered a new location - prepare for a fight!"
+             | :? RewardRoom -> $"You can now claim your rewards (or skip them)"
+             | :? ShopRoom -> $"You have entered a shop."
+             | _ -> $"You have entered a new room")
+
+    member this.ExitRoom(room: Room) =
+        nobunagaCells <- List.empty
+        trapCells <- List.empty
+        let win = CombatSceneManager.Instance.progression.IsLastLevel
+
+        if win then
+            this.Context false $"Congratulations, you won on day (difficulty/ascension level) {Globals.Day}/7!"
+        elif room.BannerTextEnd <> "" && not (room :? CampRoom) then
+            this.Context false $"Fight result: {room.BannerTextEnd}"
+
+    member this.HeroDied() =
+        match Globals.Hero.LastAttacker with
+        | null -> "You died"
+        | :? Hero -> "You committed seppuku..."
+        | :? Boss as boss -> $"You were slain by {boss.Name}"
+        | enemy -> $"You were slain by a {enemy.Name}"
+        |> (this.Context false)
+
+    member this.BossDied(boss: Boss) =
+        let metaR =
+            typeof<Boss>
+                .GetProperty("MetaCurrencyReward", BindingFlags.NonPublic ||| BindingFlags.Instance)
+                .GetValue(boss)
+            :?> int
+
+        let coinR =
+            typeof<Boss>
+                .GetProperty("CoinReward", BindingFlags.NonPublic ||| BindingFlags.Instance)
+                .GetValue(boss)
+            :?> int
+
+        this.Context false $"You have defeated {boss.Name} and got a reward of {metaR} skulls and {coinR} coins!"
+
+    member this.WaveSpawned(wave: Wave) =
+        this.Context false $"A new wave of {wave.NEnemies} enemies has spawned!"
+
+    member this.BossRoomEnd() =
+        this.Context false $"You have defeated the boss!"
+
+    member this.SkillTriggered(skill: Skill) =
+        this.Context false $"The skill {stripTags skill.Name} has been triggered!"
+
     member this.Update() =
         if not initDone && EventsManager.Instance <> null then
             initDone <- true
-            // attacker can be null
             let man = EventsManager.Instance
-            let ctx = this.Context false
-            man.BeginRun.AddListener(fun () -> ctx "You have started a new game!")
-            // man.CoinsUpdate.AddListener(fun _coins -> ())
-            // man.MetaCurrencyUpdate.AddListener(fun _meta -> ())
-
-            man.MetaCurrencyReceived.AddListener(fun meta ->
-                ctx $"You got {meta} skulls as a reward for defeating the boss")
-
-            man.EndOfCombatTurn.AddListener(fun () ->
-                if not (CombatSceneManager.Instance.Room :? CampRoom) then
-                    ctx "The enemies' turn has ended.")
-
-            man.BeginningOfCombatTurn.AddListener(fun () ->
-                if not (CombatSceneManager.Instance.Room :? CampRoom) then
-                    ctx "It's the enemies' turn...")
-
-            man.EnterRoom.AddListener(fun room ->
-                ctx (
-                    match room with
-                    | :? CampRoom as room ->
-                        "You are at the camp - a starting location. Here, you can access the metaprogression shop that unlocks new items for skulls, or you can start the game. The metaprogression shop's owner has a cat."
-                        + (if room.UnlocksShop.CanBuyAnything() then
-                               " You have items available for purchase in the shop."
-                           else
-                               " You can't currently purchase anything from the shop.")
-                    | :? ShogunBossRoom ->
-                        $"You, {Globals.Hero.Name}, have reached the final boss - this is the Shogun Showdown!"
-                    | :? BossRoom as room -> $"You, {Globals.Hero.Name}, have encountered a boss - {room.Boss.Name}"
-                    | :? CombatRoom -> $"You have entered a new location - prepare for a fight!"
-                    | :? RewardRoom -> $"You can now claim your rewards (or skip them)"
-                    | :? ShopRoom -> $"You have entered a shop."
-                    | _ -> $"You have entered a new room"
-                ))
-
-            man.ExitRoom.AddListener(fun _room ->
-                nobunagaCells <- List.empty
-                trapCells <- List.empty)
-            // man.BeginningOfCombat.AddListener(fun _ -> ())
-            // man.EndOfCombat.AddListener(fun _ -> ())
-            man.NewWaveSpawns.AddListener(fun wave -> ctx $"A new wave of {wave.NEnemies} enemies has spawned!")
-            man.EndBossFight.AddListener(fun () -> ctx "You have defeated the boss!")
 
             man.HeroStampObtained.AddListener(fun stamp ->
                 let level =
@@ -1298,52 +1350,7 @@ type Game(plugin: MainClass) =
                     | ProgressionEnums.HeroStamp.strategist -> "Strategist"
                     | _ -> "???"
 
-                ctx $"New {stamp} stamp level achieved: {level}")
-
-            man.GameOver.AddListener(fun win ->
-                nobunagaCells <- List.empty
-                trapCells <- List.empty
-
-                ctx (
-                    if win then
-                        $"Congratulations, you won on day (difficulty/ascension level) {Globals.Day}/7!"
-                    else
-                        match Globals.Hero.LastAttacker with
-                        | :? Hero -> "You committed seppuku..."
-                        | null -> "You died"
-                        | :? Boss as boss -> $"You were slain by {boss.Name}"
-                        | enemy -> $"You were slain by a {enemy.Name}"
-                ))
-
-            man.ShogunDefeated.AddListener(fun () -> ctx "You have defeated the final boss!")
-            // man.EnemyDied.AddListener(fun _enemy -> ())
-            man.BossDied.AddListener(fun boss -> ctx $"You have defeated the boss {boss.Name}!")
-            // man.EnemyFriendlyKill.AddListener(fun () -> ())
-            // man.ComboKill.AddListener(fun _enemy -> ())
-            // man.PreciseKill.AddListener(fun _enemy -> ())
-            // man.PickupCreated.AddListener(fun _pickup -> ())
-            // man.PickupPickedUp.AddListener(fun _pickup -> ())
-            // man.TileUpgraded.AddListener(fun _tile -> ())
-            // man.NewTilePicked.AddListener(fun _tile -> ())
-            // man.ShopBegin.AddListener(fun () -> ())
-            // man.UnlocksShopBegin.AddListener(fun () -> ())
-            // man.ShopEnd.AddListener(fun () -> ())
-            man.SkillTriggered.AddListener(fun skill ->
-                let name =
-                    Utils.LocalizationUtils.LocalizedString(
-                        "Skills",
-                        $"{Enum.GetName(typeof<SkillEnums.SkillEnum>, skill)}_Name"
-                    )
-
-                ctx $"The skill {name} has been triggered!")
-
-            man.SpecialMoveEffectOnTarget.AddListener(fun _hero _target -> ())
-            man.HeroRevived.AddListener(fun () -> ctx "You've been revived! There won't be a next time!")
-            // man.RoomBegin.AddListener(fun _room -> ())
-
-            man.RoomEnd.AddListener(fun room ->
-                if room.BannerTextEnd <> "" && not (room :? CampRoom) then
-                    ctx $"Fight result: {room.BannerTextEnd}")
+                this.Context false $"New {stamp} stamp level achieved: {level}")
 
         // man.MapOpened.AddListener(fun () -> this.InhibitForces <- false)
         // man.MapCurrentLocationCleared.AddListener(fun () -> this.InhibitForces <- false)
@@ -1502,7 +1509,6 @@ type Game(plugin: MainClass) =
 
                         match ngc with
                         | Some ngc ->
-                            shouldForce <- true
                             let maxDay = ngc.heroes |> List.map _.maxUnlockedDay |> List.max
                             let main = ngc.heroes |> List.exists _.mainDeckUnlocked
                             let alt = ngc.heroes |> List.exists _.altDeckUnlocked
@@ -1586,6 +1592,7 @@ type Game(plugin: MainClass) =
                 && not MapManager.Instance.map.MovingInProgress
                 && MapManager.Instance.map.LocationSelectionMode
                 && not MapManager.Instance.mapScreen.IsInTransition
+                && MapManager.Instance.Interactable
             then
                 shouldForce <- true
                 let map = Context.map ()
@@ -1729,21 +1736,19 @@ type Game(plugin: MainClass) =
                 | _ -> this.LogError "Unknown reward")
 
             if CombatSceneManager.Instance.CurrentMode <> CombatSceneManager.Mode.mapSelection then
-                let potions =
-                    PotionsManager.Instance.HeldPotions
-                    |> Array.filter (_.AlreadyUsed >> not)
-                    |> Array.filter _.CanBeUsed
-                    |> Array.map _.Name
+                let potions' =
+                    try
+                        PotionsManager.Instance.HeldPotions |> Array.filter (_.AlreadyUsed >> not)
+                    with _ ->
+                        [||]
+
+                let potions = potions' |> Array.filter _.CanBeUsed |> Array.map _.Name
 
                 let usePotion = this.Action Consume
                 usePotion.MutateProp "consumableName" (fun x -> (x :?> StringSchema).SetEnum(potions))
                 actions <- usePotion :: actions
 
-                let potions =
-                    PotionsManager.Instance.HeldPotions
-                    |> Array.filter (_.AlreadyUsed >> not)
-                    |> Array.filter _.CanBeSold
-                    |> Array.map _.Name
+                let potions = potions' |> Array.filter _.CanBeSold |> Array.map _.Name
 
                 let sellPotion = this.Action SellConsumable
                 sellPotion.MutateProp "consumableName" (fun x -> (x :?> StringSchema).SetEnum(potions))
@@ -2535,7 +2540,7 @@ type Game(plugin: MainClass) =
                     if day > dayUnlocked then
                         Error(
                             Some
-                                $"Max unlocked day for this hero is {day}! Beat the game on a lower day to unlock higher days."
+                                $"Max unlocked day for this hero is {dayUnlocked}! Beat the game on a lower day to unlock higher days."
                         )
                     elif not deckUnlocked then
                         Error(
@@ -2543,8 +2548,15 @@ type Game(plugin: MainClass) =
                                 "You haven't unlocked this deck! Alt deck is unlocked by collecting 3 hero stamps, random deck is unlocked by beating the game on day 4"
                         )
                     else
-                        sel.UpdateDay day
-                        sel.HeroIndexUpdate i
+                        sel.UpdateDay(day - Globals.Day)
+
+                        let cur =
+                            typeof<HeroSelection>
+                                .GetField("iHero", BindingFlags.NonPublic ||| BindingFlags.Instance)
+                                .GetValue(sel)
+                            :?> int
+
+                        sel.HeroIndexUpdate(i - cur)
                         Ok None
                 | Some(_, hero) ->
                     Error(

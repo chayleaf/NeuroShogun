@@ -82,6 +82,11 @@ type public Patches() =
     [<HarmonyPrefix>]
     static member DioramaEnd() = MainClass.Instance.Game.DioramaEnd()
 
+    [<HarmonyPatch(typeof<DioramaCharacters>, "ShowDialogueText")>]
+    [<HarmonyPrefix>]
+    static member DioramaLine(text: string) =
+        MainClass.Instance.Game.ShowDioramaDialogue text
+
     [<HarmonyPatch(typeof<ScrollingCredits>, "Start")>]
     [<HarmonyPrefix>]
     static member CreditsStart() = MainClass.Instance.Game.CreditsStart()
@@ -169,3 +174,46 @@ type public Patches() =
                     MainClass.Instance.Logger.LogInfo "hero end"
                     MainClass.Instance.Game.InhibitForces <- false)
             )
+
+    [<HarmonyPatch(typeof<Boss>, nameof Unchecked.defaultof<Boss>.Die)>]
+    [<HarmonyPostfix>]
+    static member BossDied(__instance: Boss) =
+        MainClass.Instance.Game.BossDied(__instance)
+
+    [<HarmonyPatch(typeof<Hero>, nameof Unchecked.defaultof<Hero>.Die)>]
+    [<HarmonyPostfix>]
+    static member Hero() = MainClass.Instance.Game.HeroDied()
+
+    [<HarmonyPatch(typeof<CombatManager>, "ProcessTurn")>]
+    [<HarmonyPostfix>]
+    static member ProcessTurn(__result: IEnumerator byref) =
+        MainClass.Instance.Game.EnemyTurnStart()
+        __result <- EnumeratorWrapper(__result, ignore, MainClass.Instance.Game.EnemyTurnEnd)
+
+    [<HarmonyPatch(typeof<CombatSceneManager>, "EnterRoomCoroutine")>]
+    [<HarmonyPostfix>]
+    static member EnterRoom() = MainClass.Instance.Game.EnterRoom()
+
+    [<HarmonyPatch(typeof<CombatSceneManager>, "ExitRoomCoroutine")>]
+    [<HarmonyPostfix>]
+    static member ExitRoom(__instance: CombatSceneManager) =
+        MainClass.Instance.Game.ExitRoom __instance.Room
+
+    [<HarmonyPatch(typeof<Wave>, nameof Unchecked.defaultof<Wave>.Spawn)>]
+    [<HarmonyPostfix>]
+    static member WaveSpawn(__instance: Wave) =
+        MainClass.Instance.Game.WaveSpawned __instance
+
+    [<HarmonyPatch(typeof<BossRoom>, nameof Unchecked.defaultof<BossRoom>.End)>]
+    [<HarmonyPostfix>]
+    static member BossRoomEnd() = MainClass.Instance.Game.BossRoomEnd()
+
+    [<HarmonyPatch(typeof<Skill>, "InvokeSkillTriggeredEvent")>]
+    [<HarmonyPostfix>]
+    static member SkillTriggered(__instance: Skill) =
+        MainClass.Instance.Game.SkillTriggered __instance
+
+    [<HarmonyPatch(typeof<GameOverScreen>, "SequenceCoroutine")>]
+    [<HarmonyPostfix>]
+    static member GameOverSeq(__instance: GameOverScreen, __result: IEnumerator byref) =
+        __result <- EnumeratorWrapper(__result, ignore, (fun () -> __instance.Continue()))
