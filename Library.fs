@@ -1168,6 +1168,9 @@ type Game(plugin: MainClass) =
     let mutable nullAttackReason =
         "poison/thorns/trap/shockwave/karma (figure it out yourself)"
 
+    let shouldAn (s: string) =
+        s.Length > 0 && List.contains s.[0] [ 'a'; 'e'; 'y'; 'u'; 'i'; 'o' ]
+
     member this.InhibitForces
         with set value =
             if value then
@@ -1247,10 +1250,12 @@ type Game(plugin: MainClass) =
         let atkName =
             match attacker with
             | :? Hero ->
-                hit.Damage <- hit.Damage * 100
+                // hit.Damage <- hit.Damage * 100
                 "you"
             | null -> nullAttackReason
-            | _ -> attacker.Name
+            | :? Boss -> stripTags attacker.Name
+            | _ when shouldAn (stripTags attacker.Name) -> $"an {stripTags attacker.Name}"
+            | _ -> $"a {stripTags attacker.Name}"
 
         let effects =
             (if agent.AgentStats.shield then
@@ -1282,9 +1287,10 @@ type Game(plugin: MainClass) =
         match agent with
         | :? Hero -> $"You have been hit by {atkName} for {hit.Damage} damage.{effects}"
         | :? NobunagaBoss when nobunagaCells |> List.exists ((=) agent.Cell) |> not ->
-            $"{agent.Name} got hit by {atkName}, but the attack didn't seem to have any effect..."
-        | :? Boss -> $"{agent.Name} has been hit by {atkName}.{effects}"
-        | _ -> $"A {agent.Name} has been hit by {atkName}.{effects}"
+            $"{stripTags agent.Name} got hit by {atkName}, but the attack didn't seem to have any effect..."
+        | :? Boss -> $"{stripTags agent.Name} has been hit by {atkName}.{effects}"
+        | _ when shouldAn (stripTags agent.Name) -> $"An {stripTags agent.Name} has been hit by {atkName}.{effects}"
+        | _ -> $"A {stripTags agent.Name} has been hit by {atkName}.{effects}"
         |> this.Context false
 
     member this.ShowShopkeeperDialogue(text: string) =
@@ -1371,9 +1377,11 @@ type Game(plugin: MainClass) =
                     else
                         " You can't currently purchase anything from the shop.")
              | :? ShogunBossRoom ->
-                 $"You, {Globals.Hero.Name}, have reached the final boss - this is the Shogun Showdown!"
-             | :? BossRoom as room -> $"You, {Globals.Hero.Name}, have encountered a boss - {room.Boss.Name}"
-             | :? CombatRoom -> $"You have entered a new location - prepare for a fight!"
+                 $"You, {stripTags Globals.Hero.Name}, have reached the final boss - this is the Shogun Showdown!"
+             | :? BossRoom as room ->
+                 $"You, {stripTags Globals.Hero.Name}, have encountered a boss - {stripTags room.Boss.Name}"
+             | :? CombatRoom as room ->
+                 $"You have entered a new location - {stripTags room.Name} - prepare for a fight!"
              | :? RewardRoom -> $"You can now claim your rewards (or skip them)"
              | :? ShopRoom -> $"You have entered a shop."
              | _ -> $"You have entered a new room")
@@ -1392,10 +1400,11 @@ type Game(plugin: MainClass) =
 
     member this.HeroDied() =
         match Globals.Hero.LastAttacker with
-        | null -> "You died"
-        | :? Hero -> "You committed seppuku..."
-        | :? Boss as boss -> $"You were slain by {boss.Name}"
-        | enemy -> $"You were slain by a {enemy.Name}"
+        | null -> "Game over. You died."
+        | :? Hero -> "Game over. You committed seppuku..."
+        | :? Boss as boss -> $"Game over. You were slain by {stripTags boss.Name}."
+        | enemy when shouldAn (stripTags enemy.Name) -> $"Game over. You were slain by an {stripTags enemy.Name}."
+        | enemy -> $"Game over. You were slain by a {stripTags enemy.Name}."
         |> (this.Context false)
 
     member this.BossDied(boss: Boss) =
@@ -1411,7 +1420,9 @@ type Game(plugin: MainClass) =
                 .GetValue(boss)
             :?> int
 
-        this.Context false $"You have defeated {boss.Name} and got a reward of {metaR} skulls and {coinR} coins!"
+        this.Context
+            false
+            $"You have defeated {stripTags boss.Name} and got a reward of {metaR} skulls and {coinR} coins!"
 
     member this.WaveSpawned(wave: Wave) =
         this.Context false $"A new wave of {wave.NEnemies} enemies has spawned!"
@@ -1591,6 +1602,8 @@ type Game(plugin: MainClass) =
                 | { maxHp = maxHp } when maxHp > 0 -> $"{maxHp} max HP"
                 | _ -> "free"
 
+            let mutable forceAllowShop = false
+
             let shop, reward =
                 match CombatSceneManager.Instance.Room with
                 | :? CampRoom as room ->
@@ -1672,6 +1685,7 @@ type Game(plugin: MainClass) =
                             if upgrade.price.CanAfford then
                                 Some(room.TileUpgradeReward :> Reward, false)
                             else
+                                forceAllowShop <- true
                                 None
 
                     Some room.Shop, reward
@@ -1703,7 +1717,7 @@ type Game(plugin: MainClass) =
             |> Option.iter (fun shop ->
                 let ctx = Context.shop true shop
 
-                if Option.isSome reward then
+                if Option.isSome reward || forceAllowShop then
                     shouldForce <- true
 
                 ctx.get10CoinsPrice
@@ -1832,13 +1846,15 @@ type Game(plugin: MainClass) =
                     with _ ->
                         [||]
 
-                let potions = potions' |> Array.filter _.CanBeUsed |> Array.map _.Name
+                let potions =
+                    potions' |> Array.filter _.CanBeUsed |> Array.map (_.Name >> stripTags)
 
                 let usePotion = this.Action Consume
                 usePotion.MutateProp "consumableName" (fun x -> (x :?> StringSchema).SetEnum(potions))
                 actions <- usePotion :: actions
 
-                let potions = potions' |> Array.filter _.CanBeSold |> Array.map _.Name
+                let potions =
+                    potions' |> Array.filter _.CanBeSold |> Array.map (_.Name >> stripTags)
 
                 let sellPotion = this.Action SellConsumable
                 sellPotion.MutateProp "consumableName" (fun x -> (x :?> StringSchema).SetEnum(potions))
@@ -2187,7 +2203,7 @@ type Game(plugin: MainClass) =
             match
                 PotionsManager.Instance.HeldPotions
                 |> Array.filter (_.AlreadyUsed >> not)
-                |> Array.tryFind (_.Name >> Context.stripTags >> (=) consumableName)
+                |> Array.tryFind (_.Name >> stripTags >> (=) consumableName)
             with
             | Some potion when potion.CanBeUsed ->
                 let hadShield = Globals.Hero.AgentStats.shield
@@ -2226,7 +2242,7 @@ type Game(plugin: MainClass) =
                 |> (Some >> Error)
             | None ->
                 $"This consumable doesn't exist, existing consumables: {PotionsManager.Instance.HeldPotions
-                                                                        |> Array.map (_.Name >> Context.stripTags)
+                                                                        |> Array.map (_.Name >> stripTags)
                                                                         |> List.ofArray
                                                                         |> this.Serialize}"
                 |> (Some >> Error)
@@ -2390,7 +2406,7 @@ type Game(plugin: MainClass) =
             match
                 PotionsManager.Instance.HeldPotions
                 |> Array.filter (_.AlreadyUsed >> not)
-                |> Array.tryFind (_.Name >> Context.stripTags >> (=) consumableName)
+                |> Array.tryFind (_.Name >> stripTags >> (=) consumableName)
             with
             | Some potion when potion.CanBeSold ->
                 let price =
@@ -2407,7 +2423,7 @@ type Game(plugin: MainClass) =
                 |> (Some >> Error)
             | None ->
                 $"This consumable doesn't exist, existing consumables: {PotionsManager.Instance.HeldPotions
-                                                                        |> Array.map (_.Name >> Context.stripTags)
+                                                                        |> Array.map (_.Name >> stripTags)
                                                                         |> List.ofArray
                                                                         |> this.Serialize}"
                 |> (Some >> Error)
@@ -2750,9 +2766,12 @@ and [<BepInPlugin("org.pavluk.neuroshogun", "NeuroShogun", "1.0.0")>] MainClass(
         if Globals.GameInitialized && not initDone then
             this.Logger.LogInfo("Initializing")
             initDone <- true
-            Globals.DeveloperUtils._invulnerable <- true
-            // Globals.DeveloperUtils._customLocation <- true
-            Globals.DeveloperUtils._quick <- true
-            Globals.DeveloperUtils._shortLocations <- true
+
+            if SaveDataManager.Instance.runSaveData.hasRunInProgress then
+                Globals.ContinueRun <- true
+        // Globals.DeveloperUtils._invulnerable <- true
+        // Globals.DeveloperUtils._customLocation <- true
+        // Globals.DeveloperUtils._quick <- true
+        // Globals.DeveloperUtils._shortLocations <- true
         else
             ()
