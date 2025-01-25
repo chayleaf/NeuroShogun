@@ -846,8 +846,8 @@ module Context =
                 skills = Option.map List.rev x.skills
                 tiles = Option.map List.rev x.tiles })
 
-    let reward (reward: Reward) : RewardContext option =
-        if reward.Exausted then
+    let reward (rewardRoom: bool) (reward: Reward) : RewardContext option =
+        if rewardRoom && reward.Exausted then
             None
         else
             let room = CombatSceneManager.Instance.Room
@@ -1008,11 +1008,11 @@ module Context =
 
                 shop, None, None, None, ngc
             | :? RewardRoom as room ->
-                let reward = reward room.Reward
+                let reward = reward true room.Reward
 
                 None, None, None, reward, None
             | :? ShopRoom as room ->
-                let reward = reward room.TileUpgradeReward
+                let reward = reward false room.TileUpgradeReward
                 let shop = shop false room.Shop
                 None, reward, Some shop, None, None
             | _ -> None, None, None, None, None
@@ -1164,6 +1164,9 @@ type Game(plugin: MainClass) =
             $"{agent.Name} got hit by {atkName}, but the attack didn't seem to have any effect..."
         | _ -> $"{agent.Name} has been hit by {atkName}.{effects}"
         |> this.Context false
+
+    member this.ShowShopkeeperDialogue(text: string) =
+        this.Context false $"The shopkeeper says: {stripTags text}"
 
     member this.ShowCatDialogue(text: string) =
         this.Context false $"The cat says: {stripTags text}"
@@ -1588,7 +1591,8 @@ type Game(plugin: MainClass) =
             shop
             |> Option.iter (fun shop ->
                 let ctx = Context.shop true shop
-                shouldForce <- true
+                if Option.isSome reward then
+                    shouldForce <- true
 
                 ctx.get10CoinsPrice
                 |> Option.iter (fun price ->
@@ -1654,15 +1658,15 @@ type Game(plugin: MainClass) =
                     actions <- act :: actions))
 
             reward
-            |> Option.bind (fun x -> Option.map (fun y -> x, y) (Context.reward (fst x)))
-            |> Option.iter (fun ((reward, forceIfOk), ctx) ->
+            |> Option.bind (fun x -> Option.map (fun y -> x, y) (Context.reward false (fst x)))
+            |> Option.iter (fun ((reward, rewardRoom), ctx) ->
                 let reward = reward
 
                 match reward with
                 | :? NewTileReward when reward.gameObject.activeSelf ->
                     ctx.pickTileOptions
                     |> Option.iter (fun opts ->
-                        if forceIfOk then
+                        if rewardRoom then
                             shouldForce <- true
 
                         let names = Array.ofList opts |> Array.map _.name
@@ -1678,7 +1682,7 @@ type Game(plugin: MainClass) =
 
                     ctx.tileUpgrade
                     |> Option.iter (fun _ ->
-                        if forceIfOk then
+                        if rewardRoom then
                             shouldForce <- true
 
                         let act = this.Action ApplyUpgrade
@@ -1687,7 +1691,7 @@ type Game(plugin: MainClass) =
 
                     ctx.tileSacrificeReward
                     |> Option.iter (fun _ ->
-                        if forceIfOk then
+                        if rewardRoom then
                             shouldForce <- true
 
                         let act = this.Action SacrificeTile
@@ -1695,7 +1699,7 @@ type Game(plugin: MainClass) =
                         actions <- act :: actions)
 
                     if ctx.warriorsGamble then
-                        if forceIfOk then
+                        if rewardRoom then
                             shouldForce <- true
 
                         let act = this.Action GambleTile
@@ -1703,7 +1707,7 @@ type Game(plugin: MainClass) =
                         actions <- act :: actions
                 | :? NewTileReward
                 | :? TileUpgradeReward ->
-                    if not reward.Exausted then
+                    if rewardRoom && not reward.Exausted then
                         shouldForce <- false
                 // this.LogDebug "Reward not ready"
                 | null -> this.LogError "Null reward"

@@ -1,16 +1,13 @@
 namespace NeuroShogun
 
 open System.Collections
+open System.Reflection
 open HarmonyLib
 open UnityEngine.SceneManagement
 
 [<HarmonyPatch>]
 type public Patches() =
-    // __instance, __result
-    [<HarmonyPatch(typeof<Shop>, nameof Unchecked.defaultof<Shop>.Begin)>]
-    [<HarmonyPrefix>]
-    static member PreShopBegin() =
-        MainClass.Instance.Logger.LogInfo("Shop Begin")
+    static let mutable lastPickup: Pickup = null
 
     [<HarmonyPatch(typeof<SceneManager>, nameof (SceneManager.LoadScene: string -> unit), [| typeof<string> |])>]
     [<HarmonyPrefix>]
@@ -21,9 +18,13 @@ type public Patches() =
     [<HarmonyPostfix>]
     static member GlobalsDeveloper(__result: bool byref) = __result <- true
 
+    [<HarmonyPatch(typeof<Shop>, nameof Unchecked.defaultof<Shop>.InstantiateAndThrowPickupAtHero)>]
+    [<HarmonyPostfix>]
+    static member ThrowPickupAtHero(__result: Pickup byref) = lastPickup <- __result
+
     [<HarmonyPatch(typeof<Shop>, "ShopkeeperGiveFreeConsumableCoroutine")>]
     [<HarmonyPostfix>]
-    static member PostShopkeeperGiveFreeConsumableCoroutine(__result: IEnumerator byref) =
+    static member ShopkeeperGiveFreeConsumableHijack(__result: IEnumerator byref) =
         MainClass.Instance.Logger.LogInfo "freec start"
         MainClass.Instance.Game.InhibitForces <- true
 
@@ -32,6 +33,16 @@ type public Patches() =
                 __result,
                 ignore,
                 (fun () ->
+                    // dont wait for it to update, just force update it
+                    typeof<Pickup>
+                        .GetField("playerOverlapping", BindingFlags.NonPublic ||| BindingFlags.Instance)
+                        .SetValue(lastPickup, true)
+
+                    typeof<Pickup>
+                        .GetMethod("Update", BindingFlags.NonPublic ||| BindingFlags.Instance)
+                        .Invoke(lastPickup, [||])
+                    |> ignore
+
                     MainClass.Instance.Logger.LogInfo "freec end"
                     MainClass.Instance.Game.InhibitForces <- false)
             )
@@ -41,21 +52,27 @@ type public Patches() =
     static member PerformRainOfMirrors(__result: IEnumerator byref) =
         MainClass.Instance.Logger.LogInfo "rom start"
         MainClass.Instance.Game.InhibitForces <- true
-        __result <- EnumeratorWrapper(__result, ignore, (fun () ->
-            MainClass.Instance.Logger.LogInfo "rom end"
-            MainClass.Instance.Game.InhibitForces <- false))
+
+        __result <-
+            EnumeratorWrapper(
+                __result,
+                ignore,
+                (fun () ->
+                    MainClass.Instance.Logger.LogInfo "rom end"
+                    MainClass.Instance.Game.InhibitForces <- false)
+            )
 
     [<HarmonyPatch(typeof<Shop>, "ItemBoughtSequenceBegin")>]
     [<HarmonyPostfix>]
     static member ShopLock() =
         MainClass.Instance.Logger.LogInfo "ibs start"
-        // MainClass.Instance.Game.InhibitForces <- true
+        MainClass.Instance.Game.InhibitForces <- true
 
     [<HarmonyPatch(typeof<Shop>, "ItemBoughtSequenceOver")>]
     [<HarmonyPostfix>]
     static member ShopUnlock() =
         MainClass.Instance.Logger.LogInfo "ibs end"
-        // MainClass.Instance.Game.InhibitForces <- false
+        MainClass.Instance.Game.InhibitForces <- false
 
     [<HarmonyPatch(typeof<DioramaManager>, "Start")>]
     [<HarmonyPrefix>]
@@ -89,6 +106,11 @@ type public Patches() =
                     | _ -> MainClass.Instance.Logger.LogWarning "What is the cat doing?"),
                 id
             )
+
+    [<HarmonyPatch(typeof<ShopKeeper>, nameof Unchecked.defaultof<ShopKeeper>.BeginInteraction)>]
+    [<HarmonyPrefix>]
+    static member ShopkeeperTalked(text: string) =
+        MainClass.Instance.Game.ShowShopkeeperDialogue text
 
     [<HarmonyPatch(typeof<NobunagaBoss>, "AddVulnerableCells")>]
     [<HarmonyPostfix>]
@@ -138,6 +160,12 @@ type public Patches() =
     static member HeroSelectionStart(__result: IEnumerator byref) =
         MainClass.Instance.Game.InhibitForces <- true
         MainClass.Instance.Logger.LogInfo "hero start"
-        __result <- EnumeratorWrapper(__result, ignore, (fun () ->
-            MainClass.Instance.Logger.LogInfo "hero end"
-            MainClass.Instance.Game.InhibitForces <- false))
+
+        __result <-
+            EnumeratorWrapper(
+                __result,
+                ignore,
+                (fun () ->
+                    MainClass.Instance.Logger.LogInfo "hero end"
+                    MainClass.Instance.Game.InhibitForces <- false)
+            )
