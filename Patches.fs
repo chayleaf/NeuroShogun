@@ -180,6 +180,10 @@ type public Patches() =
                     MainClass.Instance.Game.InhibitForces <- false)
             )
 
+    [<HarmonyPatch(typeof<DaySelection>, nameof Unchecked.defaultof<DaySelection>.SetInitiallySelectedDayForHero)>]
+    [<HarmonyPrefix>]
+    static member DisableDaySwitchingOnHeroSelection() = false
+
     [<HarmonyPatch(typeof<Boss>, nameof Unchecked.defaultof<Boss>.Die)>]
     [<HarmonyPostfix>]
     static member BossDied(__instance: Boss) =
@@ -273,9 +277,9 @@ type public Patches() =
     [<HarmonyPostfix>]
     static member CurtainUp() = MainClass.Instance.Game.CurtainUp()
 
-    [<HarmonyPatch(typeof<Agent>, "TelegraphAction")>]
+    [<HarmonyPatch(typeof<Enemy>, "TelegraphAction")>]
     [<HarmonyPostfix>]
-    static member TelegraphAction(__instance: Agent) =
+    static member TelegraphAction(__instance: Enemy) =
         match __instance with
         | :? SniperEnemy as x ->
             if x.Action = CombatEnums.ActionEnum.Attack then

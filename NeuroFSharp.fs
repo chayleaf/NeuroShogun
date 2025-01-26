@@ -376,10 +376,10 @@ type IntegerSchema() =
             | None -> n
 
         base.JsonProps()
-        |> proc "minimum" this.Minimum
-        |> proc "exclusiveMinimum" this.ExclusiveMinimum
-        |> proc "maximum" this.Maximum
         |> proc "exclusiveMaximum" this.ExclusiveMaximum
+        |> proc "maximum" this.Maximum
+        |> proc "exclusiveMinimum" this.ExclusiveMinimum
+        |> proc "minimum" this.Minimum
 
 type NumberSchema() =
     inherit Schema(Number)
@@ -1012,7 +1012,7 @@ type Game<'T>() =
             | Some(url) -> url
             | None -> System.Environment.GetEnvironmentVariable("NEURO_SDK_WS_URL")
 
-        if url = null then
+        if String.IsNullOrEmpty url then
             raise (Exception("Please set NEURO_SDK_WS_URL"))
 
         let serverCmdTy = TypeInfo.fromSystemType typeof<ServerCommand>

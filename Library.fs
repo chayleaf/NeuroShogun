@@ -700,7 +700,15 @@ module Context =
           coins = Globals.Coins
           skullMetaCurrency = Globals.KillCount
           facingDirection = Dir.ofGame hero.FacingDir
-          consumables = pm.HeldPotions |> Array.mapi (fun i x -> consumable (Some i) x) |> List.ofArray
+          consumables =
+            (pm.HeldPotions |> Array.mapi (fun i x -> consumable (Some i) x) |> List.ofArray)
+            @ (List.init (pm.NPotionsSlots - pm.NPotions) (fun i ->
+                { slot = Some(pm.NPotions + i)
+                  name = None
+                  description = None
+                  buyPrice = None
+                  unlockPrice = None
+                  sellPrice = None }))
           tiles = deck |> Seq.map (fun (s, x) -> tile true (Some s) x) |> List.ofSeq
           specialMove = specialMove hero
           attackQueue =
@@ -2746,25 +2754,22 @@ and [<BepInPlugin("org.pavluk.neuroshogun", "NeuroShogun", "1.0.0")>] MainClass(
     member _.Game = game.Value
 
     member this.Awake() =
-        try
-            MainClass.instance <- this
-            harmony <- Harmony.CreateAndPatchAll(Assembly.GetExecutingAssembly())
-            this.Logger <- base.Logger
-            let cnt = Seq.fold (fun x _ -> x + 1) 0 (harmony.GetPatchedMethods())
-            Globals.ForcePlayTutorial <- false
-            Globals.Tutorial <- false
-            Globals.SkipTitleScreen <- true
+        MainClass.instance <- this
+        harmony <- Harmony.CreateAndPatchAll(Assembly.GetExecutingAssembly())
+        this.Logger <- base.Logger
+        let cnt = Seq.fold (fun x _ -> x + 1) 0 (harmony.GetPatchedMethods())
+        Globals.ForcePlayTutorial <- false
+        Globals.Tutorial <- false
+        Globals.SkipTitleScreen <- true
 
-            game <-
-                Some(
-                    let game = Game(this)
-                    game.Start(None, cts.Token) |> ignore
-                    game
-                )
+        game <-
+            Some(
+                let game = Game(this)
+                game.Start(None, cts.Token) |> ignore
+                game
+            )
 
-            this.Logger.LogInfo($"Plugin NeuroShogun is loaded with {cnt} patches!")
-        with exc ->
-            this.Logger.LogError($"ERROR {exc}")
+        this.Logger.LogInfo($"Plugin NeuroShogun is loaded with {cnt} patches!")
 
     // wow i can't imagine this person is so lazy who would ever do so much on every frame smh my head
     member _.LateUpdate() =
