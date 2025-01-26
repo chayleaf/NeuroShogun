@@ -643,7 +643,8 @@ module Context =
             | :? BarricadeEnemy -> None, Some(enemy (cell.Agent :?> Enemy)), None
             | x -> Some(enemy (x :?> Enemy)), None, None
 
-        { xPos = cell.IndexInGrid
+        { // use 1-based indexing because corrupted wave mentions "odd/even" cells with the first cell being odd (probably)
+          xPos = cell.IndexInGrid + 1
           spotlight =
             if List.isEmpty state.nobunaga then
                 None
