@@ -361,7 +361,8 @@ type EnemyContext =
       elite: string option
       attackQueue: TileContext list
       intention: Intention
-      hp: HpContext
+      [<SkipSerializingIfNone>]
+      hp: HpContext option
       [<SkipSerializingIfEquals 0>]
       remainingFrozenDuration: int
       [<SkipSerializingIfEquals false>]
@@ -611,7 +612,11 @@ module Context =
           confusionResistance = enemy :? CorruptedSoulBoss
           iceResistance = not enemy.Freezable
           pushResistance = not enemy.Movable
-          hp = hp enemy.AgentStats
+          hp =
+            match enemy with
+            | :? ShogunSummonerEnemy
+            | :? SwapperEnemy -> None
+            | _ -> Some(hp enemy.AgentStats)
           remainingFrozenDuration = enemy.AgentStats.ice
           shield = enemy.AgentStats.shield
           remainingPoisonedDuration = enemy.AgentStats.poison
