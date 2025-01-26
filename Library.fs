@@ -1313,9 +1313,9 @@ type Game(plugin: MainClass) =
 
     member this.ShowDialogue (agent: Agent) (text: string) =
         match agent with
-        | :? Hero -> $"You, {stripTags Globals.Hero.Name}, say: {stripTags text}"
-        | :? Boss -> $"{stripTags agent.Name} says: {stripTags text}"
-        | _ -> $"A {stripTags agent.Name} says: {stripTags text}"
+        | :? Hero -> $"You, {stripTags Globals.Hero.Name}, say: {Context.stripHtml text}"
+        | :? Boss -> $"{stripTags agent.Name} says: {Context.stripHtml text}"
+        | _ -> $"A {stripTags agent.Name} says: {Context.stripHtml text}"
         |> (this.Context false)
 
     member this.CurtainDown(title: string) =
