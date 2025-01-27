@@ -13,25 +13,6 @@ type Direction =
     | Left
     | Right
 
-type EnumeratorWrapper(obj: IEnumerator, onNext: int -> unit, onDone: unit -> unit) =
-    let mutable count = 0
-
-    interface IEnumerator with
-        override _.Current = obj.Current
-
-        override _.MoveNext() =
-            if obj.MoveNext() then
-                onNext count
-                count <- count + 1
-                true
-            else
-                onDone ()
-                false
-
-        override _.Reset() =
-            count <- 0
-            obj.Reset()
-
 module Dir =
     let ofStr s =
         match s with

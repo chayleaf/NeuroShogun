@@ -5,9 +5,62 @@ open System.Reflection
 open HarmonyLib
 open UnityEngine.SceneManagement
 
+type EnumeratorSeq(a: IEnumerator, b: IEnumerator) =
+    let mutable current = a
+
+    interface IEnumerator with
+        override _.Current = current.Current
+
+        override _.MoveNext() =
+            if current.MoveNext() then
+                true
+            elif current = a then
+                current <- b
+                current.MoveNext()
+            else
+                false
+
+        override _.Reset() =
+            a.Reset()
+            b.Reset()
+            current <- a
+
+type EnumeratorSingle(func: unit -> obj) =
+    let mutable init = true
+
+    interface IEnumerator with
+        override _.Current = func ()
+
+        override _.MoveNext() =
+            let ret = init
+            init <- false
+            ret
+
+        override _.Reset() = init <- true
+
+type EnumeratorWrapper(obj: IEnumerator, onNext: int -> unit, onDone: unit -> unit) =
+    let mutable count = 0
+
+    interface IEnumerator with
+        override _.Current = obj.Current
+
+        override _.MoveNext() =
+            if obj.MoveNext() then
+                onNext count
+                count <- count + 1
+                true
+            else
+                onDone ()
+                false
+
+        override _.Reset() =
+            count <- 0
+            obj.Reset()
+
 [<HarmonyPatch>]
 type public Patches() =
     static let mutable lastPickup: Pickup = null
+    static let mutable csmInstance: CreditsSceneManager = null
 
     [<HarmonyPatch(typeof<SceneManager>, nameof (SceneManager.LoadScene: string -> unit), [| typeof<string> |])>]
     [<HarmonyPrefix>]
@@ -92,9 +145,39 @@ type public Patches() =
     static member ShowDialogue(__instance: Agent, text: string) =
         MainClass.Instance.Game.ShowDialogue __instance text
 
-    [<HarmonyPatch(typeof<ScrollingCredits>, "Start")>]
-    [<HarmonyPrefix>]
-    static member CreditsStart() = MainClass.Instance.Game.CreditsStart()
+    [<HarmonyPatch(typeof<CreditsSceneManager>, "Awake")>]
+    [<HarmonyPostfix>]
+    static member GetCreditsSceneManagerInstance(__instance: CreditsSceneManager) = csmInstance <- __instance
+
+    [<HarmonyPatch(typeof<ScrollingCredits>, "CreditsRollSequence")>]
+    [<HarmonyPostfix>]
+    static member CreditsSeq(__result: IEnumerator byref, __instance: ScrollingCredits) =
+        MainClass.Instance.Game.CreditsStart()
+        Globals.SkipTitleScreen <- true
+
+        __result <-
+            EnumeratorWrapper(
+                EnumeratorSeq(
+                    __result,
+                    EnumeratorSingle(fun () ->
+                        let canvas: UnityEngine.RectTransform =
+                            typeof<ScrollingCredits>
+                                .GetField("canvas", BindingFlags.NonPublic ||| BindingFlags.Instance)
+                                .GetValue(__instance)
+                            :?> UnityEngine.RectTransform
+
+                        let scrollSpeed =
+                            typeof<ScrollingCredits>
+                                .GetField("scrollSpeed", BindingFlags.NonPublic ||| BindingFlags.Instance)
+                                .GetValue(__instance)
+                            :?> float32
+
+                        let time = (canvas.sizeDelta.y * canvas.localScale.y - 4.0f) / scrollSpeed
+                        UnityEngine.WaitForSeconds(time))
+                ),
+                ignore,
+                csmInstance.Continue
+            )
 
     [<HarmonyPatch(typeof<Cat>, "WaitAndMaoAndPurr")>]
     [<HarmonyPostfix>]
@@ -291,3 +374,10 @@ type public Patches() =
             then
                 MainClass.Instance.Game.AddWarning "Baru is targeting this cell with volley" Globals.Hero.Cell
         | _ -> ()
+
+    [<HarmonyPatch(typeof<SaveDataManager>, nameof Unchecked.defaultof<SaveDataManager>.LoadSaveData)>]
+    [<HarmonyPostfix>]
+    static member DisableForceTutorial() =
+        Globals.ForcePlayTutorial <- false
+        Globals.Tutorial <- false
+        Globals.SkipTitleScreen <- true
