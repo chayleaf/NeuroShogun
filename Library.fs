@@ -560,14 +560,26 @@ module Context =
           description = stripHtml hero.SpecialAbilityDescription
           cooldownCharge = $"{hero.SpecialMove.Cooldown.Charge}/{hero.SpecialMove.Cooldown.Cooldown}" }
 
-    let enemy (enemy: Enemy) : EnemyContext =
+    let enemy (names: Map<string, int>) (enemy: Enemy) : EnemyContext * Map<string, int> =
         let traits =
             typeof<Enemy>
                 .GetProperty("EnemyTraits", BindingFlags.NonPublic ||| BindingFlags.Instance)
                 .GetValue(enemy)
             :?> AgentEnums.EnemyTraitsEnum array
 
-        { name = stripTags enemy.Name
+        let baseName = stripTags enemy.Name
+
+        let name, map =
+            match Map.tryFind baseName names with
+            | Some n -> $"{baseName} ({n + 1})", Map.add baseName (n + 1) names
+            | None ->
+                (if enemy :? TwinBaseBoss then
+                     $"{baseName} (1)"
+                 else
+                     baseName),
+                Map.add baseName 1 names
+
+        { name = name
           description = stripTags enemy.Description
           facingDirection = Dir.ofGame enemy.FacingDir
           traits =
@@ -620,28 +632,34 @@ module Context =
           remainingFrozenDuration = enemy.AgentStats.ice
           shield = enemy.AgentStats.shield
           remainingPoisonedDuration = enemy.AgentStats.poison
-          cursed = enemy.AgentStats.curse }
+          cursed = enemy.AgentStats.curse },
+        map
 
-    let cell (state: CellState) (cell: Cell) : CellContext =
-        let flying =
+    let cell (state: CellState) (names: Map<string, int>) (cell: Cell) : CellContext * Map<string, int> =
+        let names, flying =
             match CombatSceneManager.Instance.Room with
             | :? CorruptedSoulBossRoom as room when room.Boss <> null ->
                 let boss = room.Boss :?> CorruptedSoulBoss
 
                 if cell = boss.PseudoCell && not (boss.Animator.GetBool("IsDown")) then
-                    Some(enemy boss)
+                    let boss, names = enemy names boss
+                    names, Some boss
                 else
-                    None
-            | _ -> None
+                    names, None
+            | _ -> names, None
 
-        let enemy, entity, you =
+        let names, enemy, entity, you =
             match cell.Agent with
-            | null -> None, None, None
-            | :? Hero as hero -> None, None, Some(Dir.ofGame hero.FacingDir)
+            | null -> names, None, None, None
+            | :? Hero as hero -> names, None, None, Some(Dir.ofGame hero.FacingDir)
             | :? ThornsEnemy
             | :? DummyEnemy
-            | :? BarricadeEnemy -> None, Some(enemy (cell.Agent :?> Enemy)), None
-            | x -> Some(enemy (x :?> Enemy)), None, None
+            | :? BarricadeEnemy as x ->
+                let ctx, names = enemy names (x :?> Enemy)
+                names, None, Some ctx, None
+            | x ->
+                let ctx, names = enemy names (x :?> Enemy)
+                names, Some ctx, None, None
 
         { // use 1-based indexing because corrupted wave mentions "odd/even" cells with the first cell being odd (probably)
           xPos = cell.IndexInGrid + 1
@@ -682,7 +700,8 @@ module Context =
           flyingEnemy = flying
           youAreHereAndFacing = you
           goHereToOpenShop = false
-          goHereToStartNewGame = false }
+          goHereToStartNewGame = false },
+        names
 
     let hero (hero: Hero) : HeroContext =
         { name = stripTags hero.Name
@@ -1075,7 +1094,8 @@ module Context =
     let context (state: CellState) : Context =
         let room = CombatSceneManager.Instance.Room
 
-        let mutable cells = room.Grid.Cells |> Array.map (cell state) |> List.ofArray
+        let mutable cells =
+            room.Grid.Cells |> Array.mapFold (cell state) Map.empty |> fst |> List.ofArray
 
         let shop, shop1, shop2, reward, ngc =
             match room with
@@ -1180,6 +1200,14 @@ type Game(plugin: MainClass) =
     let mutable skipDioramaTime = None
     let mutable isForce = false
     let mutable forceNames = None
+    let mutable enemyNameMap: (Enemy * string) list = List.empty
+
+    let enemyName (enemy: Enemy) =
+        enemyNameMap
+        |> List.tryFind (fst >> (=) enemy)
+        |> Option.map snd
+        |> Option.defaultValue enemy.Name
+        |> stripTags
 
     let mutable nullAttackReason =
         "poison/thorns/trap/shockwave/karma (figure it out yourself)"
@@ -1272,9 +1300,8 @@ type Game(plugin: MainClass) =
                 // hit.Damage <- hit.Damage * 100
                 "you"
             | null -> nullAttackReason
-            | :? Boss -> stripTags attacker.Name
-            | _ when shouldAn (stripTags attacker.Name) -> $"an {stripTags attacker.Name}"
-            | _ -> $"a {stripTags attacker.Name}"
+            | :? Enemy as attacker -> enemyName attacker
+            | _ -> attacker.Name
 
         let effects =
             (if agent.AgentStats.shield then
@@ -1305,11 +1332,10 @@ type Game(plugin: MainClass) =
 
         match agent with
         | :? Hero -> $"You have been hit by {atkName} for {hit.Damage} damage.{effects}"
-        | :? NobunagaBoss when nobunagaCells |> List.exists ((=) agent.Cell) |> not ->
-            $"{stripTags agent.Name} got hit by {atkName}, but the attack didn't seem to have any effect..."
-        | :? Boss -> $"{stripTags agent.Name} has been hit by {atkName}.{effects}"
-        | _ when shouldAn (stripTags agent.Name) -> $"An {stripTags agent.Name} has been hit by {atkName}.{effects}"
-        | _ -> $"A {stripTags agent.Name} has been hit by {atkName}.{effects}"
+        | :? NobunagaBoss as agent when nobunagaCells |> List.exists ((=) agent.Cell) |> not ->
+            $"{enemyName agent} got hit by {atkName}, but the attack didn't seem to have any effect..."
+        | :? Enemy as agent -> $"{enemyName agent} has been hit by {atkName}.{effects}"
+        | _ -> $"{agent.Name} has been hit by {atkName}.{effects}"
         |> this.Context false
 
     member this.ShowShopkeeperDialogue(text: string) =
@@ -1321,8 +1347,12 @@ type Game(plugin: MainClass) =
     member this.ShowDialogue (agent: Agent) (text: string) =
         match agent with
         | :? Hero -> $"You, {stripTags Globals.Hero.Name}, say: {Context.stripHtml text}"
-        | :? Boss -> $"{stripTags agent.Name} says: {Context.stripHtml text}"
-        | _ -> $"A {stripTags agent.Name} says: {Context.stripHtml text}"
+        | :? Boss as agent -> $"{enemyName agent} says: {Context.stripHtml text}"
+        | _ ->
+            if shouldAn (stripTags agent.Name) then
+                $"An {stripTags agent.Name} says: {Context.stripHtml text}"
+            else
+                $"A {stripTags agent.Name} says: {Context.stripHtml text}"
         |> (this.Context false)
 
     member this.CurtainDown(title: string) =
@@ -1386,6 +1416,17 @@ type Game(plugin: MainClass) =
         if not (CombatSceneManager.Instance.Room :? CampRoom) then
             this.Context false "It's the enemies' turn..."
 
+            enemyNameMap <-
+                CombatManager.Instance.Enemies
+                |> Seq.sortBy _.Cell.IndexInGrid
+                |> Seq.mapFold
+                    (fun s e ->
+                        let c, s = Context.enemy s e
+                        (e, c.name), s)
+                    Map.empty
+                |> fst
+                |> List.ofSeq
+
     member this.EnemyTurnEnd() =
         if not (CombatSceneManager.Instance.Room :? CampRoom) then
             this.Context false "The enemies' turn has ended."
@@ -1403,7 +1444,7 @@ type Game(plugin: MainClass) =
              | :? ShogunBossRoom ->
                  $"You, {stripTags Globals.Hero.Name}, have reached the final boss - this is the Shogun Showdown!"
              | :? BossRoom as room ->
-                 $"You, {stripTags Globals.Hero.Name}, have encountered a boss - {stripTags room.Boss.Name}"
+                 $"You, {stripTags Globals.Hero.Name}, have encountered a boss - {enemyName room.Boss}"
              | :? CombatRoom as room ->
                  $"You have entered a new location - {stripTags room.Name} - prepare for a fight!"
              | :? RewardRoom -> $"You can now claim your rewards (or skip them)"
@@ -1427,7 +1468,7 @@ type Game(plugin: MainClass) =
         match Globals.Hero.LastAttacker with
         | null -> "Game over. You died."
         | :? Hero -> "Game over. You committed seppuku..."
-        | :? Boss as boss -> $"Game over. You were slain by {stripTags boss.Name}."
+        | :? Boss as boss -> $"Game over. You were slain by {enemyName boss}."
         | enemy when shouldAn (stripTags enemy.Name) -> $"Game over. You were slain by an {stripTags enemy.Name}."
         | enemy -> $"Game over. You were slain by a {stripTags enemy.Name}."
         |> (this.Context false)
