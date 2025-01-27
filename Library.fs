@@ -1446,6 +1446,11 @@ type Game(plugin: MainClass) =
             this.Context false $"Fight result: {room.BannerTextEnd}"
 
     member this.HeroDied() =
+        nobunagaCells <- List.empty
+        trapCells <- List.empty
+        corruptedCells <- List.empty
+        warnings <- List.empty
+        bombCells <- List.empty
         match Globals.Hero.LastAttacker with
         | null -> "Game over. You died."
         | :? Hero -> "Game over. You committed seppuku..."
