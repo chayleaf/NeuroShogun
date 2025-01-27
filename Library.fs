@@ -1185,7 +1185,8 @@ type Game(plugin: MainClass) =
         "poison/thorns/trap/shockwave/karma (figure it out yourself)"
 
     let shouldAn (s: string) =
-        s.Length > 0 && List.contains s.[0] [ 'a'; 'e'; 'y'; 'u'; 'i'; 'o' ]
+        s.Length > 0
+        && List.contains s.[0] [ 'a'; 'e'; 'y'; 'u'; 'i'; 'o'; 'A'; 'E'; 'Y'; 'U'; 'I'; 'O' ]
 
     member this.InhibitForces
         with set value =
