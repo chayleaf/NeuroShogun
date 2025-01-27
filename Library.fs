@@ -582,7 +582,7 @@ module Context =
             if enemy.EliteType = AgentEnums.EliteTypeEnum.None then
                 None
             else
-                Some(AgentEnums.AgentEnumsUtils.EliteDescription enemy.EliteType)
+                Some(stripTags (AgentEnums.AgentEnumsUtils.EliteDescription enemy.EliteType))
           intention =
             match enemy.Action with
             | CombatEnums.ActionEnum.Wait when (enemy :? CorruptedSoulBoss) ->
