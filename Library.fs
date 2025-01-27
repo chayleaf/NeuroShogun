@@ -1169,7 +1169,7 @@ type Game(plugin: MainClass) =
             | text when text.StartsWith "[R]" -> text.Substring 3, true
             | text -> text, false
 
-        (if char then "Character 2: " else "Character 1: ") + stripTags text
+        (if char then "???: " else "The Astronomer: ") + stripTags text
 
     let mutable initDone = false
     let mutable nobunagaCells = List.empty
