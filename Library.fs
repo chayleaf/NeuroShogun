@@ -1349,7 +1349,7 @@ type Game(plugin: MainClass) =
 
     member this.DioramaStart() =
         this.Context
-            false
+            true
             ($"You're viewing the ending cutscene."
              + (if Globals.Day = 7 then
                     "\n"
@@ -1395,7 +1395,7 @@ type Game(plugin: MainClass) =
         warnings <- List.empty
 
         if not (CombatSceneManager.Instance.Room :? CampRoom) then
-            this.Context false "It's the enemies' turn..."
+            this.Context true "It's the enemies' turn..."
 
             enemyNameMap <-
                 CombatManager.Instance.Enemies
@@ -1410,7 +1410,7 @@ type Game(plugin: MainClass) =
 
     member this.EnemyTurnEnd() =
         if not (CombatSceneManager.Instance.Room :? CampRoom) then
-            this.Context false "The enemies' turn has ended."
+            this.Context true "The enemies' turn has ended."
 
     member this.EnterRoom() =
         this.Context
