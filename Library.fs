@@ -2010,11 +2010,11 @@ type Game(plugin: MainClass) =
         | CheatLoadout(None, None, None, None, None) ->
             Globals.DeveloperUtils._customLoadout <- false
             Ok(Some "disabled")
-        | CheatLoadout(n_rewards, tiles, attack_effects, skills, consumables) ->
+        | CheatLoadout(n_rewards, tiles, attackEffects, skills, consumables) ->
             let l = Globals.DeveloperUtils.loadout
             let n_rewards = Option.defaultValue l.nRewards n_rewards
             let tiles = Option.defaultValue l.tiles tiles
-            let effects = Option.defaultValue l.attackEffects attack_effects
+            let effects = Option.defaultValue l.attackEffects attackEffects
             let skills = Option.defaultValue l.skills skills
             let consumables = Option.defaultValue l.consumables consumables
             l.nRewards <- n_rewards
