@@ -124,7 +124,7 @@ type Actions =
     | [<Action("wait", "Wait for a single turn (ends your turn)")>] Wait
     // available in combat when queued tiles
     | [<Action("attack",
-               "Execute the attacks in your tile queue in a specified order. Any attacks that you have not listed will be removed from the queue. Be careful - your facing direction and position affects what the attacks will do. Ends your turn.")>] Attack of
+               "*Immediately* execute some (or all) of the attacks in your tile queue in a specified order. Any attacks that you have not listed will be removed from the queue. Be careful - your facing direction and position affects what the attacks will do. Ends your turn.")>] Attack of
         tileNames: string list
     // available in combat when any unqueued tiles
     // mutability: list all tiles
@@ -1265,7 +1265,7 @@ type Game(plugin: MainClass) =
                         match CombatSceneManager.Instance.CurrentMode with
                         | CombatSceneManager.Mode.mapSelection -> "Please pick your next destination"
                         | CombatSceneManager.Mode.reward -> "Please pick your rewards"
-                        | _ -> "Please pick your next action"
+                        | _ -> "It's your turn!"
                       action_names = names }
                 )
         with _ ->
@@ -1413,7 +1413,7 @@ type Game(plugin: MainClass) =
             this.Context true "The enemies' turn has ended."
 
     member this.EnterRoom() =
-        let combatPrompt = "Avoid enemy attacks whenever you can, healing is expensive! You can dodge, outmaneuver the enemies by predicting where they will go, or just kill them before they get the chance to deal damage. Sometimes you can even trick the enemies into attacking each other! Make sure not to end your turns while standing in cells that are about to be attacked."
+        let combatPrompt = "Avoid enemy attacks whenever you can, healing is expensive! You can dodge, outmaneuver the enemies by predicting where they will go, or just kill them before they get the chance to deal damage. Sometimes you can even trick the enemies into attacking each other! Each cell can only contain a single entity, you can't normally move into enemies, but special moves allow you to do it in certain conditions. Enemies will only do what they *intend** to do, and will not do anything else on their turn. Keep track of attacks' direction."
         this.Context
             false
             (match CombatSceneManager.Instance.Room with
