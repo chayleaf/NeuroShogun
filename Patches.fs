@@ -59,8 +59,8 @@ type EnumeratorWrapper(obj: IEnumerator, onNext: int -> unit, onDone: unit -> un
 
 [<HarmonyPatch>]
 type public Patches() =
-    static let mutable lastPickup: Pickup = null
-    static let mutable csmInstance: CreditsSceneManager = null
+    static let mutable lastPickup: Pickup | null = null
+    static let mutable csmInstance: CreditsSceneManager | null = null
 
     [<HarmonyPatch(typeof<SceneManager>, nameof (SceneManager.LoadScene: string -> unit), [| typeof<string> |])>]
     [<HarmonyPrefix>]
@@ -155,29 +155,32 @@ type public Patches() =
         MainClass.Instance.Game.CreditsStart()
         Globals.SkipTitleScreen <- true
 
-        __result <-
-            EnumeratorWrapper(
-                EnumeratorSeq(
-                    __result,
-                    EnumeratorSingle(fun () ->
-                        let canvas: UnityEngine.RectTransform =
-                            typeof<ScrollingCredits>
-                                .GetField("canvas", BindingFlags.NonPublic ||| BindingFlags.Instance)
-                                .GetValue(__instance)
-                            :?> UnityEngine.RectTransform
+        match csmInstance with
+        | null -> ()
+        | csmInstance ->
+            __result <-
+                EnumeratorWrapper(
+                    EnumeratorSeq(
+                        __result,
+                        EnumeratorSingle(fun () ->
+                            let canvas: UnityEngine.RectTransform =
+                                typeof<ScrollingCredits>
+                                    .GetField("canvas", BindingFlags.NonPublic ||| BindingFlags.Instance)
+                                    .GetValue(__instance)
+                                :?> UnityEngine.RectTransform
 
-                        let scrollSpeed =
-                            typeof<ScrollingCredits>
-                                .GetField("scrollSpeed", BindingFlags.NonPublic ||| BindingFlags.Instance)
-                                .GetValue(__instance)
-                            :?> float32
+                            let scrollSpeed =
+                                typeof<ScrollingCredits>
+                                    .GetField("scrollSpeed", BindingFlags.NonPublic ||| BindingFlags.Instance)
+                                    .GetValue(__instance)
+                                :?> float32
 
-                        let time = (canvas.sizeDelta.y * canvas.localScale.y - 4.0f) / scrollSpeed
-                        UnityEngine.WaitForSeconds(time))
-                ),
-                ignore,
-                csmInstance.Continue
-            )
+                            let time = (canvas.sizeDelta.y * canvas.localScale.y - 4.0f) / scrollSpeed
+                            UnityEngine.WaitForSeconds(time))
+                    ),
+                    ignore,
+                    csmInstance.Continue
+                )
 
     [<HarmonyPatch(typeof<Cat>, "WaitAndMaoAndPurr")>]
     [<HarmonyPostfix>]
@@ -212,12 +215,12 @@ type public Patches() =
 
     [<HarmonyPatch(typeof<NobunagaBoss>, nameof Unchecked.defaultof<NobunagaBoss>.ReceiveAttack)>]
     [<HarmonyPrefix>]
-    static member NobunagaAttacked(hit: Hit, attacker: Agent, __instance: NobunagaBoss) =
+    static member NobunagaAttacked(hit: Hit, attacker: Agent | null, __instance: NobunagaBoss) =
         MainClass.Instance.Game.ReceiveAttack(__instance, hit, attacker)
 
     [<HarmonyPatch(typeof<Agent>, nameof Unchecked.defaultof<Agent>.ReceiveAttack)>]
     [<HarmonyPrefix>]
-    static member AgentAttacked(hit: Hit, attacker: Agent, __instance: Agent) =
+    static member AgentAttacked(hit: Hit, attacker: Agent | null, __instance: Agent) =
         if not (__instance :? NobunagaBoss) then
             MainClass.Instance.Game.ReceiveAttack(__instance, hit, attacker)
 

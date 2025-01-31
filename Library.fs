@@ -60,7 +60,7 @@ type Observatory<'T when 'T: equality>(func: unit -> 'T) =
         old <> cur
 
 type Actions =
-    | [<Action("cheat_quick", "Cheat")>] CheatQuick
+    (*| [<Action("cheat_quick", "Cheat")>] CheatQuick
     | [<Action("cheat_skip_title", "Cheat")>] CheatSkipTitle
     | [<Action("cheat_short_locs", "Cheat")>] CheatShortLocations
     | [<Action("cheat_invuln", "Cheat")>] CheatInvulnerable
@@ -85,7 +85,7 @@ type Actions =
     | [<Action("cheat_money", "Cheat")>] CheatMoney
     | [<Action("cheat_skulls", "Cheat")>] CheatSkulls
     | [<Action("cheat_kill", "Cheat")>] CheatKill
-    | [<Action("cheat_heal", "Cheat")>] CheatHeal
+    | [<Action("cheat_heal", "Cheat")>] CheatHeal*)
     // available in combat when you can move
     // conditions
     // - AllowHeroAction
@@ -119,16 +119,16 @@ type Actions =
         direction: Direction
     // available in combat always
     // mutability: set the directions enum
-    | [<Action("turn", "Turn around and face in another direction")>] Turn of direction: Direction
+    | [<Action("turn", "Turn around and face in another direction. Your facing direction may affect attacks and special moves, but it doesn't affect regular movement.")>] Turn of direction: Direction
     // available in combat always (ice forces a wait in update loop)
     | [<Action("wait", "Wait for a single turn (ends your turn)")>] Wait
     // available in combat when queued tiles
     | [<Action("attack",
-               "Execute the attacks in your tile queue in a specified order. Any attacks that you have not listed will be discarded")>] Attack of
+               "Execute the attacks in your tile queue in a specified order. Any attacks that you have not listed will be removed from the queue. Be careful - your facing direction and position affects what the attacks will do. Ends your turn.")>] Attack of
         tileNames: string list
     // available in combat when any unqueued tiles
     // mutability: list all tiles
-    | [<Action("play_tile", "Add an attack to your tile queue (ends your turn)")>] PlayTile of tileName: string
+    | [<Action("queue_tile", "Add an attack to your tile queue (ends your turn)")>] QueueTile of tileName: string
     // available when PotionsManager.Instance.HeldPotions isnt empty
     // mutability: list all potions that CanBeUsed
     | [<Action("consume", "Consume an item (does not end your turn)")>] Consume of consumableName: string
@@ -328,7 +328,7 @@ type Intention =
     | LeapRight
     | TurnLeft
     | TurnRight
-    | PlayTile
+    | QueueTile
     | Attack
     | Wait
 
@@ -595,7 +595,7 @@ module Context =
                 Intention.LeapRight
             | CombatEnums.ActionEnum.MoveRight -> Intention.MoveRight
             | CombatEnums.ActionEnum.Attack -> Intention.Attack
-            | CombatEnums.ActionEnum.PlayTile -> Intention.PlayTile
+            | CombatEnums.ActionEnum.PlayTile -> Intention.QueueTile
             | CombatEnums.ActionEnum.FlipLeft -> Intention.TurnLeft
             | CombatEnums.ActionEnum.FlipRight -> Intention.TurnRight
             | _ -> Intention.Wait
@@ -1274,7 +1274,7 @@ type Game(plugin: MainClass) =
     member _.NullAttackReason
         with set value = nullAttackReason <- value
 
-    member this.ReceiveAttack(agent: Agent, hit: Hit, attacker: Agent) =
+    member this.ReceiveAttack(agent: Agent, hit: Hit, attacker: Agent | null) =
         let atkName =
             match attacker with
             | :? Hero ->
@@ -1282,7 +1282,7 @@ type Game(plugin: MainClass) =
                 "you"
             | null -> nullAttackReason
             | :? Enemy as attacker -> enemyName attacker
-            | _ -> attacker.Name
+            | attacker -> attacker.Name
 
         let effects =
             (if agent.AgentStats.shield then
@@ -1413,6 +1413,7 @@ type Game(plugin: MainClass) =
             this.Context true "The enemies' turn has ended."
 
     member this.EnterRoom() =
+        let combatPrompt = "Avoid enemy attacks whenever you can, healing is expensive! You can dodge, outmaneuver the enemies by predicting where they will go, or just kill them before they get the chance to deal damage. Sometimes you can even trick the enemies into attacking each other! Make sure not to end your turns while standing in cells that are about to be attacked."
         this.Context
             false
             (match CombatSceneManager.Instance.Room with
@@ -1423,11 +1424,11 @@ type Game(plugin: MainClass) =
                     else
                         " You can't currently purchase anything from the shop.")
              | :? ShogunBossRoom ->
-                 $"You, {stripTags Globals.Hero.Name}, have reached the final boss - this is the Shogun Showdown!"
+                 $"You, {stripTags Globals.Hero.Name}, have reached the final boss - this is the Shogun Showdown! {combatPrompt}"
              | :? BossRoom as room ->
-                 $"You, {stripTags Globals.Hero.Name}, have encountered a boss - {enemyName room.Boss}"
+                 $"You, {stripTags Globals.Hero.Name}, have encountered a boss - {enemyName room.Boss}. {combatPrompt}"
              | :? CombatRoom as room ->
-                 $"You have entered a new location - {stripTags room.Name} - prepare for a fight!"
+                 $"You have entered a new location - {stripTags room.Name} - prepare for a fight! {combatPrompt}"
              | :? RewardRoom -> $"You can now claim your rewards (or skip them)"
              | :? ShopRoom -> $"You have entered a shop."
              | _ -> $"You have entered a new room")
@@ -1640,7 +1641,7 @@ type Game(plugin: MainClass) =
                             |> Seq.map fst
                             |> Array.ofSeq
 
-                        let play = this.Action PlayTile
+                        let play = this.Action QueueTile
 
                         play.MutateProp "tileName" (fun x -> (x :?> StringSchema).SetEnum(hand))
 
@@ -2003,7 +2004,7 @@ type Game(plugin: MainClass) =
             | _ -> Error(Some "There's no shops or rewards in this room!")
 
         match action with
-        | CheatQuick ->
+        (*| CheatQuick ->
             Globals.DeveloperUtils.Quick <- not Globals.DeveloperUtils.Quick
             Ok(Some $"{Globals.DeveloperUtils.Quick}")
         | CheatCustomDay None ->
@@ -2101,7 +2102,7 @@ type Game(plugin: MainClass) =
             Ok(Some "killed")
         | CheatHeal ->
             Globals.Hero.FullHeal()
-            Ok(Some "healed")
+            Ok(Some "healed")*)
         | Move dir ->
             combatError false
             |> chk (chkValid dir) "There is nothing in that direction"
@@ -2225,7 +2226,7 @@ type Game(plugin: MainClass) =
                             )
 
                     context))
-        | PlayTile tileName ->
+        | QueueTile tileName ->
             combatError false
             |> chk TilesManager.Instance.CanInteractWithTiles "You can't currently use tiles"
             |> chk Globals.Hero.AttackQueue.CanAddTile "Your attack queue is full"
@@ -2776,21 +2777,23 @@ and [<BepInPlugin("org.pavluk.neuroshogun", "NeuroShogun", "1.0.0")>] MainClass(
     let mutable harmony = null
     let mutable initDone = false
     let mutable game = None
+    let mutable logger: ManualLogSource | null = null
     let cts = new Threading.CancellationTokenSource()
-
-    [<DefaultValue>]
-    val mutable public Logger: ManualLogSource
 
     [<DefaultValue>]
     static val mutable private instance: MainClass
 
     static member Instance = MainClass.instance
     member _.Game = game.Value
+    member _.Logger: ManualLogSource =
+        match logger with
+        | null -> raise(Exception "this isn't supposed to happen")
+        | x -> x
 
     member this.Awake() =
         MainClass.instance <- this
         harmony <- Harmony.CreateAndPatchAll(Assembly.GetExecutingAssembly())
-        this.Logger <- base.Logger
+        logger <- base.Logger
         let cnt = Seq.fold (fun x _ -> x + 1) 0 (harmony.GetPatchedMethods())
         Globals.ForcePlayTutorial <- false
         Globals.Tutorial <- false

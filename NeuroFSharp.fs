@@ -43,11 +43,11 @@ type TagName(name: string) =
 type FieldAttr internal () =
     inherit Attribute()
 
-    abstract member Serialized: name: string -> value: obj -> serialized: Lazy<JsonValue> -> (string * JsonValue) list
+    abstract member Serialized: name: string -> value: objnull -> serialized: Lazy<JsonValue> -> (string * JsonValue) list
 
     default _.Serialized name _ serialized = [ (name, serialized.Value) ]
 
-type SkipSerializingIfEquals(x: obj) =
+type SkipSerializingIfEquals(x: objnull) =
     inherit FieldAttr()
 
     override _.Serialized name value serialized =
@@ -500,7 +500,7 @@ module internal TypeInfo =
 
     let pascalToCamel (s: string) : string = string(s[0]).ToLower() + s.Substring(1)
 
-    let fillMissing ((x, y): TypeInfo) : obj option =
+    let fillMissing ((x, y): TypeInfo) : objnull option =
         match y with
         | Option _ ->
             let cases = FSharpType.GetUnionCases x
@@ -740,7 +740,7 @@ module internal TypeInfo =
 
         Result.map (fun _ -> res) state
 
-    and deserialize (path: JsonPath) (info: TypeInfo) (obj: JsonValue) : Result<obj, DeserError> =
+    and deserialize (path: JsonPath) (info: TypeInfo) (obj: JsonValue) : Result<objnull, DeserError> =
 
         try
             let (ty, info') = info
@@ -774,7 +774,7 @@ module internal TypeInfo =
                                 ret.SetValue(x, i)
                                 (i + 1, ret))))
                     (Ok((0, arr)))
-                |> Result.map (fun x -> snd x :> obj)
+                |> Result.map (fun x -> snd x :> objnull)
             | (Union(info, _), JsonValue.String name) ->
                 match info |> Array.tryFind (_.caseName >> (=) name) with
                 | Some x when x.props.Length = 0 -> Ok(FSharpValue.MakeUnion(x.info, Array.empty))
@@ -848,7 +848,7 @@ module internal TypeInfo =
         ((info, _attrs): (Case * Action) array * Attribute array)
         (name: string)
         (obj: JsonValue)
-        : Result<obj option, DeserError> =
+        : Result<objnull option, DeserError> =
         match info |> Array.tryFind (snd >> _.Name >> (=) name) with
         | Some(x, _) ->
             let res =
@@ -959,7 +959,7 @@ type Game<'T>() =
                 let invoke = ty.GetMethod("Invoke")
                 let (argType, _) = FSharpType.GetFunctionElements ty
 
-                let args =
+                let args: objnull =
                     if FSharpType.IsTuple argType then
                         let variantTypes = FSharpType.GetTupleElements argType
                         FSharpValue.MakeTuple(variantTypes |> Array.map (fun _ -> null), argType)
