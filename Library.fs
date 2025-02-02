@@ -119,7 +119,7 @@ type Actions =
         direction: Direction
     // available in combat always
     // mutability: set the directions enum
-    | [<Action("turn", "Turn around and face in another direction. Your facing direction may affect attacks and special moves, but it doesn't affect regular movement.")>] Turn of direction: Direction
+    | [<Action("turn", "Turn around and face in another direction. Your facing direction may affect attacks and special moves, but it doesn't affect regular movement, nor does it affect taking damage from enemies.")>] Turn of direction: Direction
     // available in combat always (ice forces a wait in update loop)
     | [<Action("wait", "Wait for a single turn (ends your turn)")>] Wait
     // available in combat when queued tiles
@@ -1265,7 +1265,7 @@ type Game(plugin: MainClass) =
                         match CombatSceneManager.Instance.CurrentMode with
                         | CombatSceneManager.Mode.mapSelection -> "Please pick your next destination"
                         | CombatSceneManager.Mode.reward -> "Please pick your rewards"
-                        | _ -> "It's your turn!"
+                        | _ -> "It's your turn! Execute any actions, they will be performed immediately. After your turn is over, enemies' turn will begin, they will act *exactly* according to their current intentions."
                       action_names = names }
                 )
         with _ ->
