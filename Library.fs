@@ -336,6 +336,11 @@ type Intention =
     | Attack
     | Wait
 
+type TileOwner =
+    | Player
+    | Event
+    | Enemy
+
 type EnemyContext =
     { name: string
       description: string
@@ -506,17 +511,21 @@ module Context =
                 { name = stripTags (TileEnums.TileEnumsUtils.LocalizedTileEffectName(eff))
                   description = stripTags (TileEnums.TileEnumsUtils.LocalizedTileEffectDescription(eff)) }
 
-    let tile (player: bool) (name: string option) (tile: Tile) : TileContext =
+    let tile (owner: TileOwner) (name: string option) (tile: Tile) : TileContext =
         { name = stripTags (Option.defaultValue tile.Attack.Name name)
           damage = tile.Attack.Value
           description = stripTags tile.Attack.Description
           attackEffect = attackEffect tile.Attack.AttackEffect
           tileEffect = tileEffect tile.Attack.TileEffect
           unlockPrice = None
-          cooldownCharge = Some $"{tile.CooldownCharge}/{tile.Attack.Cooldown}"
+          cooldownCharge =
+            if owner = Enemy then
+                None
+            else
+                Some $"{tile.CooldownCharge}/{tile.Attack.Cooldown}"
           inAttackQueue =
             if
-                player
+                owner = Player
                 && CombatSceneManager.Instance.CurrentMode = CombatSceneManager.Mode.combat
             then
                 Some(tile.TileContainer :? AttackQueueTileContainer)
@@ -524,7 +533,7 @@ module Context =
                 None
           upgradeSlotsUsed =
             if
-                player
+                owner <> Enemy
                 && CombatSceneManager.Instance.CurrentMode <> CombatSceneManager.Mode.combat
             then
                 Some $"{tile.Attack.Level}/{tile.Attack.MaxLevel}"
@@ -619,7 +628,7 @@ module Context =
             | _ -> Intention.Wait
           boss = enemy :? Boss
           onlyVulnerableInSpotlight = enemy :? NobunagaBoss
-          attackQueue = enemy.AttackQueue.TCC.Tiles |> Seq.map (tile false None) |> List.ofSeq
+          attackQueue = enemy.AttackQueue.TCC.Tiles |> Seq.map (tile Enemy None) |> List.ofSeq
           confusionResistance = enemy :? CorruptedSoulBoss
           iceResistance = not enemy.Freezable
           pushResistance = not enemy.Movable
@@ -733,7 +742,7 @@ module Context =
                   buyPrice = None
                   unlockPrice = None
                   sellPrice = None }))
-          tiles = deck |> Seq.map (fun (s, x) -> tile true (Some s) x) |> List.ofSeq
+          tiles = deck |> Seq.map (fun (s, x) -> tile Player (Some s) x) |> List.ofSeq
           specialMove = specialMove true hero
           attackQueue =
             deck
@@ -910,7 +919,7 @@ module Context =
                     let item = unlockTileShopData item
 
                     let item =
-                        { tile false None item with
+                        { tile Event None item with
                             unlockPrice = Some(price ui.price) }
 
                     { ret with
@@ -983,7 +992,7 @@ module Context =
                                 | None -> ((name, tile), Map.add name 1 state))
                             map
                         |> fst
-                        |> Array.map (fun (s, x) -> tile true (Some s) x)
+                        |> Array.map (fun (s, x) -> tile Event (Some s) x)
                         |> List.ofArray
 
                     let pickTileOptions =
