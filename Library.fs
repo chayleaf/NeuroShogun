@@ -241,7 +241,7 @@ type TileContext =
       [<SkipSerializingIfNone>]
       unlockPrice: ShopPrice option
       [<SkipSerializingIfNone>]
-      cooldownCharge: HpContext option
+      remainingCooldown: HpContext option
       [<SkipSerializingIfNone>]
       inAttackQueue: bool option
       [<SkipSerializingIfNone>]
@@ -289,7 +289,7 @@ type SpecialMoveContext =
     { name: string
       // desc
       description: string
-      cooldownCharge: HpContext
+      remainingCooldown: HpContext
       [<SkipSerializingIfNone>]
       canBePerformed: bool option }
 
@@ -518,11 +518,11 @@ module Context =
           attackEffect = attackEffect tile.Attack.AttackEffect
           tileEffect = tileEffect tile.Attack.TileEffect
           unlockPrice = None
-          cooldownCharge =
+          remainingCooldown =
             if owner = Enemy then
                 None
             else
-                Some $"{tile.CooldownCharge}/{tile.Attack.Cooldown}"
+                Some $"{tile.TurnsBeforeCharged}/{tile.Attack.Cooldown}"
           inAttackQueue =
             if
                 owner = Player
@@ -561,7 +561,7 @@ module Context =
 
         { name = stripTags hero.SpecialAbilityName
           description = stripHtml hero.SpecialAbilityDescription
-          cooldownCharge = $"{hero.SpecialMove.Cooldown.Charge}/{hero.SpecialMove.Cooldown.Cooldown}"
+          remainingCooldown = $"{hero.SpecialMove.Cooldown.Cooldown - hero.SpecialMove.Cooldown.Charge}/{hero.SpecialMove.Cooldown.Cooldown}"
           canBePerformed =
             if combat then
                 Some(chkSpecialMove Left || chkSpecialMove Right)
