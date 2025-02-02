@@ -9,7 +9,7 @@ open BepInEx.Logging
 open HarmonyLib
 open NeuroFSharp
 
-type Direction =
+type Dir =
     | Left
     | Right
 
@@ -112,14 +112,16 @@ type Actions =
     //   - after free turnaround
     //   - in RainOfMirrors.PerformEffect
     // mutability: set the directions enum
-    | [<Action("move", "Move in a direction (ends your turn)")>] Move of direction: Direction
+    | [<Action("move", "Move in a direction (ends your turn)")>] Move of direction: Dir
     // available in combat when theres an enemy in a direction
     // mutability: set the directions enum
     | [<Action("special_move", "Execute the special move in a particular direction (ends your turn)")>] SpecialMove of
-        direction: Direction
+        direction: Dir
     // available in combat always
     // mutability: set the directions enum
-    | [<Action("turn", "Turn around and face in another direction. Your facing direction may affect attacks and special moves, but it doesn't affect regular movement, nor does it affect taking damage from enemies.")>] Turn of direction: Direction
+    | [<Action("turn",
+               "Turn around and face in another direction. Your facing direction may affect attacks and special moves, but it doesn't affect regular movement, nor does it affect taking damage from enemies.")>] Turn of
+        direction: Dir
     // available in combat always (ice forces a wait in update loop)
     | [<Action("wait", "Wait for a single turn (ends your turn)")>] Wait
     // available in combat when queued tiles
@@ -287,13 +289,15 @@ type SpecialMoveContext =
     { name: string
       // desc
       description: string
-      cooldownCharge: HpContext }
+      cooldownCharge: HpContext
+      [<SkipSerializingIfNone>]
+      canBePerformed: bool option }
 
 type PlayerContext =
     { name: string
       coins: int
       skullMetaCurrency: int
-      facingDirection: Direction
+      facingDirection: Dir
       consumables: ConsumableContext list
       skills: SkillContext list
       tiles: TileContext list
@@ -335,7 +339,7 @@ type Intention =
 type EnemyContext =
     { name: string
       description: string
-      facingDirection: Direction
+      facingDirection: Dir
       [<SkipSerializingIfNone>]
       traits: string list option
       [<SkipSerializingIfNone>]
@@ -387,7 +391,7 @@ type CellContext =
       [<SkipSerializingIfNone>]
       flyingEnemy: EnemyContext option
       [<SkipSerializingIfNone>]
-      youAreHereAndFacing: Direction option
+      youAreHereAndFacing: Dir option
       [<SkipSerializingIfEquals false>]
       goHereToOpenShop: bool
       [<SkipSerializingIfEquals false>]
@@ -536,10 +540,24 @@ module Context =
 
     let hp (s: AgentStats) : HpContext = $"{s.HP}/{s.maxHP}"
 
-    let specialMove (hero: Hero) : SpecialMoveContext =
+    let specialMove (combat: bool) (hero: Hero) : SpecialMoveContext =
+        let chkMove dir =
+            let cell = Globals.Hero.Cell.Neighbour(Dir.toGame dir, 1)
+            cell <> null && cell.Agent = null
+
+        let chkSpecialMove dir =
+            not (chkMove dir)
+            && Globals.Hero.SpecialMove.Cooldown.IsCharged
+            && Globals.Hero.SpecialMove.Allowed(Globals.Hero, Dir.toGame dir)
+
         { name = stripTags hero.SpecialAbilityName
           description = stripHtml hero.SpecialAbilityDescription
-          cooldownCharge = $"{hero.SpecialMove.Cooldown.Charge}/{hero.SpecialMove.Cooldown.Cooldown}" }
+          cooldownCharge = $"{hero.SpecialMove.Cooldown.Charge}/{hero.SpecialMove.Cooldown.Cooldown}"
+          canBePerformed =
+            if combat then
+                Some(chkSpecialMove Left || chkSpecialMove Right)
+            else
+                None }
 
     let enemy (names: Map<string, int>) (enemy: Enemy) : EnemyContext * Map<string, int> =
         let traits =
@@ -684,9 +702,9 @@ module Context =
           goHereToStartNewGame = false },
         names
 
-    let hero (hero: Hero) : HeroContext =
+    let hero (combat: bool) (hero: Hero) : HeroContext =
         { name = stripTags hero.Name
-          specialMove = specialMove hero
+          specialMove = specialMove combat hero
           mainDeckUnlocked = hero.Unlocked
           altDeckUnlocked = hero.Unlocked && hero.AltDeckUnlocked
           randomDeckUnlocked = hero.Unlocked && hero.RandomDeckUnlocked
@@ -716,7 +734,7 @@ module Context =
                   unlockPrice = None
                   sellPrice = None }))
           tiles = deck |> Seq.map (fun (s, x) -> tile true (Some s) x) |> List.ofSeq
-          specialMove = specialMove hero
+          specialMove = specialMove true hero
           attackQueue =
             deck
             |> Seq.filter (fun (_, x) -> x.TileContainer :? AttackQueueTileContainer)
@@ -1061,7 +1079,7 @@ module Context =
             :?> bool
 
         if room.HeroSelection.goButton.Interactable && not locked then
-            let heroes = room.HeroSelection.heroes |> Array.map hero |> List.ofArray
+            let heroes = room.HeroSelection.heroes |> Array.map (hero false) |> List.ofArray
             let maxDay = heroes |> List.map _.maxUnlockedDay |> List.max
 
             Some
@@ -1265,7 +1283,8 @@ type Game(plugin: MainClass) =
                         match CombatSceneManager.Instance.CurrentMode with
                         | CombatSceneManager.Mode.mapSelection -> "Please pick your next destination"
                         | CombatSceneManager.Mode.reward -> "Please pick your rewards"
-                        | _ -> "It's your turn! Execute any actions, they will be performed immediately. After your turn is over, enemies' turn will begin, they will act *exactly* according to their current intentions."
+                        | _ ->
+                            "It's your turn! Execute any actions, they will be performed immediately. After your turn is over, enemies' turn will begin, they will act *exactly* according to their current intentions."
                       action_names = names }
                 )
         with _ ->
@@ -1413,7 +1432,9 @@ type Game(plugin: MainClass) =
             this.Context true "The enemies' turn has ended."
 
     member this.EnterRoom() =
-        let combatPrompt = "Avoid enemy attacks whenever you can, healing is expensive! You can dodge, outmaneuver the enemies by predicting where they will go, or just kill them before they get the chance to deal damage. Sometimes you can even trick the enemies into attacking each other! Each cell can only contain a single entity, you can't normally move into enemies, but special moves allow you to do it in certain conditions. Enemies will only do what they *intend** to do, and will not do anything else on their turn. Keep track of attacks' direction."
+        let combatPrompt =
+            "Avoid enemy attacks whenever you can, healing is expensive! You can dodge, outmaneuver the enemies by predicting where they will go, or just kill them before they get the chance to deal damage. Sometimes you can even trick the enemies into attacking each other! Each cell can only contain a single entity, you can't normally move into enemies, but special moves allow you to do it in certain conditions. Enemies will only do what they *intend** to do, and will not do anything else on their turn. Keep track of attacks' direction."
+
         this.Context
             false
             (match CombatSceneManager.Instance.Room with
@@ -1452,6 +1473,7 @@ type Game(plugin: MainClass) =
         corruptedCells <- List.empty
         warnings <- List.empty
         bombCells <- List.empty
+
         match Globals.Hero.LastAttacker with
         | null -> "Game over. You died."
         | :? Hero -> "Game over. You committed seppuku..."
@@ -2785,9 +2807,10 @@ and [<BepInPlugin("org.pavluk.neuroshogun", "NeuroShogun", "1.0.0")>] MainClass(
 
     static member Instance = MainClass.instance
     member _.Game = game.Value
+
     member _.Logger: ManualLogSource =
         match logger with
-        | null -> raise(Exception "this isn't supposed to happen")
+        | null -> raise (Exception "this isn't supposed to happen")
         | x -> x
 
     member this.Awake() =
